@@ -18,6 +18,7 @@ pub mod test_api {
 
     pub use crate::library::model::Wallpaper;
     pub use crate::library::Library;
+    pub use crate::wallpaper::com::{Position, RawMonitor, WallpaperWorker};
 
     pub fn open_library(root: PathBuf) -> Result<Library, String> {
         Library::open(root).map_err(|e| e.to_string())
@@ -25,6 +26,30 @@ pub mod test_api {
 
     pub fn list(lib: &Library) -> Result<Vec<Wallpaper>, String> {
         lib.list().map_err(|e| e.to_string())
+    }
+
+    /// 构造壁纸工作线程，用于真实投放验证。
+    pub fn new_worker() -> WallpaperWorker {
+        WallpaperWorker::spawn()
+    }
+
+    pub fn position_fill() -> Position {
+        Position::Fill
+    }
+
+    /// 枚举显示器原始数据（含当前壁纸路径）。
+    pub fn list_monitors(worker: &WallpaperWorker) -> Result<Vec<RawMonitor>, String> {
+        worker.list_monitors().map_err(|e| e.to_string())
+    }
+
+    /// 设置壁纸，`monitor_id` 为 None 表示全部屏幕。
+    pub fn set_wallpaper(
+        worker: &WallpaperWorker,
+        monitor_id: Option<String>,
+        path: &str,
+        position: Position,
+    ) -> Result<(), String> {
+        worker.set_wallpaper(monitor_id, path, position).map_err(|e| e.to_string())
     }
 }
 

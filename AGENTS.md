@@ -72,7 +72,21 @@ src/
 
 ### 7. 拓扑变化监听
 
-监听 `WM_DISPLAYCHANGE`（或 Tauri 的显示器变更事件），拓扑变化后重新枚举并在短暂延迟后按映射重放一次，抵消 Windows 在断开显示器时的自动重排。
+监听 `WM_DISPLAYCHANGE`（见 `display_watch.rs`），拓扑变化后延迟 1.5 秒重新枚举再按映射重放一次，
+抵消 Windows 在断开显示器时的自动重排。延迟是必要的：立刻读取往往拿到中间态。
+
+### 8. 壁纸存储格式
+
+统一转 JPEG（质量 92），**不要改回 PNG**。实测同样 3 张壁纸：PNG 存储 12.9MB，
+JPEG 存储 2.09MB，而屏幕上无法分辨。带透明通道的图才保留 PNG（JPEG 不支持 alpha）。
+`tests/e2e_import.rs` 里有体积回归断言守着这条。
+
+### 9. 平台 API 的 feature 门控
+
+`windows` crate 的 API 由 Cargo feature 控制，缺失时表现为「模块里找不到这个函数」，
+容易误判为版本不对。已知：`RegisterClassW` / `WNDCLASSW` 需要 `Win32_Graphics_Gdi`。
+`CreateWindowExW` 的 `hinstance` 是泛型 `Param<HINSTANCE>`，必须传裸 `HINSTANCE` 而非 `Option`。
+`GetModuleHandleW` 返回 `HMODULE`，转 `HINSTANCE` 需显式 `HINSTANCE(h.0)`。
 
 ## 工作规范
 
@@ -88,8 +102,28 @@ src/
 npm run dev          # 前端开发服务
 npm run tauri dev    # 完整应用开发模式（含 Rust 热重载）
 npm run tauri build  # 生产构建
-cargo check --manifest-path src-tauri/Cargo.toml   # 仅检查 Rust 编译
+
+cargo check --manifest-path src-tauri/Cargo.toml        # 仅检查 Rust 编译
+cargo test --manifest-path src-tauri/Cargo.toml         # 全部测试
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 仅单元测试（快）
 ```
+
+## 测试说明
+
+- `--lib` 单元测试：身份解析、虚拟屏识别、比例提示、库导入去重与删除，全部使用临时目录，无副作用。
+- `tests/e2e_import.rs`：拿 `C:\Users\qiulu\Desktop\imgs\壁纸` 下的真实图片走完整导入链路，
+  校验副本格式与体积。样本不存在时自动跳过。
+- `tests/e2e_apply.rs`：**会真实修改桌面壁纸**。只动索引 0 的显示器，且无论断言成败都会恢复原壁纸。
+  在他人机器上运行前请确认这一点。
+
+## 常见故障
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 构建报 `icons/icon.ico not found` | 缺应用图标 | 确认 `src-tauri/icons/` 下存在 icon.ico 与 icon.png |
+| 界面图片全空白，控制台无报错 | 中文路径未逐段 URL 编码 | 检查 `encodeFsPath`，不能整体 `encodeURIComponent`（会把 `/` 也编码） |
+| `cargo check` 说找不到 `RegisterClassW` | 缺 `Win32_Graphics_Gdi` feature | 见上文约束 9 |
+| 所有屏壁纸被重置成同一张 | Windows 在显示器断开时的重排行为 | 拓扑监听应重放绑定，检查 `topology_watch` 日志 |
 
 ## 已知边界
 
