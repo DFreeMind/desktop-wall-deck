@@ -141,3 +141,17 @@ export const IconSparkle = svg(
     <path d="M18.6 16.4l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2z" />
   </>,
 );
+export const IconArrowLeft = svg(<path d="M15 5l-7 7 7 7" />);
+export const IconFolderScan = svg(
+  <>
+    <path d="M3 7.2c0-1 .8-1.8 1.8-1.8h3.6c.5 0 1 .2 1.3.6l1.1 1.2h6.4c1 0 1.8.8 1.8 1.8v7.8c0 1-.8 1.8-1.8 1.8H4.8c-1 0-1.8-.8-1.8-1.8V7.2z" />
+    <path d="M8.4 12.6h.01M11.2 12.6h.01M14 12.6h.01" />
+  </>,
+);
+export const IconClose = svg(<path d="M6 6l12 12M18 6L6 18" />);
+export const IconExpand = svg(
+  <>
+    <path d="M4 9V5.6c0-.9.7-1.6 1.6-1.6H9M15 4h3.4c.9 0 1.6.7 1.6 1.6V9M20 15v3.4c0 .9-.7 1.6-1.6 1.6H15M9 20H5.6c-.9 0-1.6-.7-1.6-1.6V15" />
+  </>,
+);
+

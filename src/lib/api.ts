@@ -10,6 +10,7 @@ import type {
   ApplyResult,
   Folder,
   FolderNode,
+  FolderScan,
   ImportReport,
   Position,
   Target,
@@ -55,6 +56,25 @@ export const api = {
     call<void>("library_move_to_folder", { id, folderId }),
 
   libraryUsage: () => call<[number, number]>("library_usage"),
+
+  /** 预扫描本机目录，得到会导入的图片数量，不写库。 */
+  libraryScanFolder: (path: string) => call<FolderScan>("library_scan_folder", { path }),
+
+  /** 把本机目录（递归）导入壁纸库。 */
+  libraryImportFolder: (path: string, folderId?: string | null) =>
+    call<ImportReport>("library_import_folder", { path, folderId: folderId ?? null }),
+
+  /** 补齐缺失缩略图，返回修复数量。 */
+  libraryRepairThumbnails: () => call<number>("library_repair_thumbnails"),
+
+  /**
+   * 把任意本地图片转成 data URL。
+   *
+   * 专用于「系统当前壁纸」：它的路径不由本应用掌控，可能不在 asset 白名单内、
+   * 也可能没有扩展名，直接拼 asset 地址会静默加载失败。
+   */
+  currentWallpaperPreview: (path: string) =>
+    call<string>("current_wallpaper_preview", { path }),
 
   folderTree: () => call<FolderNode[]>("folder_tree"),
 

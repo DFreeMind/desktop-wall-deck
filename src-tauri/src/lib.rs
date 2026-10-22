@@ -83,6 +83,10 @@ pub fn run() {
 
             let state = AppState::new(worker.clone(), library, data_dir.clone());
 
+            // 缩略图是派生文件，可能因目录被清理或拷贝时遗漏而缺失，
+            // 表现为列表一片灰块。原图还在，启动后顺手补齐，不打扰用户。
+            state.library.repair_thumbnails().ok();
+
             // 拓扑变化 → 重放绑定的处理线程
             // 注意：worker 是 Clone 语义（内部共享 channel），传克隆值避免所有权移动
             let tx = topology_watch::spawn(worker.clone(), state.library.clone());
@@ -111,6 +115,10 @@ pub fn run() {
             commands::library_rename,
             commands::library_usage,
             commands::library_move_to_folder,
+            commands::library_scan_folder,
+            commands::library_import_folder,
+            commands::library_repair_thumbnails,
+            commands::current_wallpaper_preview,
             commands::folder_create,
             commands::folder_rename,
             commands::folder_delete,

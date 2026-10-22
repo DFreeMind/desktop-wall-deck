@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use super::db::{chrono_now, Db, WallpaperRecord};
 use super::error::{LibError, LibResult};
 use super::image_ops;
-use super::model::{Folder, FolderNode, ImportFailure, ImportReport, Wallpaper};
+use super::model::{Folder, FolderNode, FolderScan, ImportFailure, ImportReport, Wallpaper};
 
 pub struct Library {
     root: PathBuf,
@@ -166,6 +166,86 @@ impl Library {
     }
 
     // ---------------- 文件夹 ----------------
+
+    /// 补齐缺失或损坏的缩略图，返回成功重建的数量。
+    ///
+    /// # 为什么需要它
+    ///
+    /// 缩略图是派生文件，会因以下原因丢失：用户手动清理过库目录、
+    /// 拷贝库到新机器时漏了 `thumbs/`、上次写入时磁盘写满。
+    /// 一旦缺失，列表里就是一片灰色空块，看起来像「应用坏了」。
+    /// 原图还在，重建成本很低，因此启动后静默自愈，不打扰用户。
+    ///
+    /// 判据是「文件不存在」或「文件为 0 字节」，不校验图片完整性——
+    /// 逐张解码校验会让启动明显变慢，收益不成比例。
+    pub fn repair_thumbnails(&self) -> LibResult<usize> {
+        let mut fixed = 0;
+        for rec in self.db.list()? {
+            let thumb = Path::new(&rec.thumb_path);
+            let healthy = thumb
+                .metadata()
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
+            if healthy {
+                continue;
+            }
+
+            // 原图也没了就没有可恢复的余地，跳过（删除由用户显式发起）
+            let src = Path::new(&rec.file_path);
+            if !src.exists() {
+                continue;
+            }
+
+            let img = match image_ops::load_oriented(src) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+            if let Some(parent) = thumb.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(bytes) = image_ops::make_thumbnail(&img) {
+                if std::fs::write(thumb, bytes).is_ok() {
+                    fixed += 1;
+                }
+            }
+        }
+        Ok(fixed)
+    }
+
+    /// 预扫描目录：只统计会导入哪些图片，不写入任何东西。
+    ///
+    /// 供「添加本机文件夹」在真正导入前先告诉用户「这里有 128 张图」，
+    /// 避免用户对着一个深目录点了导入才发现要跑很久。
+    pub fn scan_folder(&self, dir: &Path) -> LibResult<FolderScan> {
+        if !dir.is_dir() {
+            return Err(LibError::NotFound(dir.display().to_string()));
+        }
+        let files = self.expand(&[dir.to_path_buf()]);
+        let already: usize = files
+            .iter()
+            .filter(|p| {
+                let key = std::fs::canonicalize(p)
+                    .unwrap_or_else(|_| (*p).clone())
+                    .to_string_lossy()
+                    .to_string();
+                self.db.find_by_source(&key).ok().flatten().is_some()
+            })
+            .count();
+
+        Ok(FolderScan {
+            path: dir.to_string_lossy().to_string(),
+            total: files.len(),
+            already_in_library: already,
+        })
+    }
+
+    /// 导入整个目录（递归）。返回的报告中 `skipped` 即「已在库中」的张数。
+    pub fn import_folder(&self, dir: &Path, folder_id: Option<&str>) -> LibResult<ImportReport> {
+        if !dir.is_dir() {
+            return Err(LibError::NotFound(dir.display().to_string()));
+        }
+        self.import(&[dir.to_path_buf()], folder_id)
+    }
 
     pub fn create_folder(&self, name: &str, parent_id: Option<&str>) -> LibResult<Folder> {
         let trimmed = name.trim();
@@ -350,6 +430,53 @@ mod tests {
     }
 
     // ---------------- 文件夹 ----------------
+
+    #[test]
+    fn 缩略图丢失后可自动补齐() {
+        let root = temp_root("thumb-repair");
+        let src = write_png(&root, "e.png");
+        let lib = Library::open(root.join("data")).unwrap();
+        lib.import(&[src], None).unwrap();
+
+        let wp = lib.list().unwrap().into_iter().next().unwrap();
+        // 模拟「用户清理过库目录 / 拷贝时遗漏 thumbs」
+        std::fs::remove_file(&wp.thumb_path).unwrap();
+        assert!(!Path::new(&wp.thumb_path).exists());
+
+        let fixed = lib.repair_thumbnails().unwrap();
+        assert_eq!(fixed, 1, "应重建 1 张缩略图");
+        assert!(Path::new(&wp.thumb_path).exists(), "缩略图应被重建");
+
+        // 再跑一次不应重复处理
+        assert_eq!(lib.repair_thumbnails().unwrap(), 0);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 扫描目录报告总数与已入库数量() {
+        let root = temp_root("scan");
+        let dir = root.join("photos");
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = write_png(&dir, "a.png");
+        let b = write_png(&dir, "b.png");
+        // 非图片文件不应计入
+        std::fs::write(dir.join("note.txt"), b"hello").unwrap();
+
+        let lib = Library::open(root.join("data")).unwrap();
+        let first = lib.scan_folder(&dir).unwrap();
+        assert_eq!(first.total, 2);
+        assert_eq!(first.already_in_library, 0);
+
+        lib.import_folder(&dir, None).unwrap();
+
+        let second = lib.scan_folder(&dir).unwrap();
+        assert_eq!(second.total, 2, "总数不变");
+        assert_eq!(second.already_in_library, 2, "两张都已在库中");
+        assert!(a.exists() && b.exists(), "扫描不复制也不删除源文件");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn 文件夹可嵌套且穿透统计总数() {

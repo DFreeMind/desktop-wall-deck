@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import type {
   FolderNode,
+  FolderScan,
   LibraryScope,
   Monitor,
   Position,
@@ -13,12 +15,18 @@ import { TopologyCanvas } from "../components/TopologyCanvas";
 import { WallpaperGrid } from "../components/WallpaperGrid";
 import { MonitorPanel } from "../components/MonitorPanel";
 import { SideNav, type NavView } from "../components/SideNav";
-import { ConfirmDialog, MoveDialog, PromptDialog } from "../components/dialogs";
+import {
+  ConfirmDialog,
+  FolderImportDialog,
+  MoveDialog,
+  PromptDialog,
+} from "../components/dialogs";
 import { Toast, type ToastItem } from "../components/Toast";
 import { SourcesView } from "./SourcesView";
 import { SettingsView } from "./SettingsView";
 import { CollectionsView } from "./CollectionsView";
 import { IconRefresh } from "../components/icons";
+import { useScreenWallpapers } from "../hooks/useScreenWallpapers";
 
 /**
  * 主视图：左侧导航 + 中间内容区 + 右侧属性面板。
@@ -38,7 +46,8 @@ type Dialog =
   | { kind: "rename-folder"; id: string; name: string }
   | { kind: "move"; wallpaper: Wallpaper }
   | { kind: "delete-folder"; id: string; name: string; total: number }
-  | { kind: "delete-wallpaper"; wallpaper: Wallpaper };
+  | { kind: "delete-wallpaper"; wallpaper: Wallpaper }
+  | { kind: "import-folder" };
 
 export default function App() {
   const [topology, setTopology] = useState<Topology | null>(null);
@@ -56,6 +65,13 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [showVirtual, setShowVirtual] = useState(false);
   const [dialog, setDialog] = useState<Dialog>({ kind: "none" });
+
+  /** 添加本机文件夹的临时状态：路径、扫描结果、目标合集 */
+  const [pickPath, setPickPath] = useState("");
+  const [pickScan, setPickScan] = useState<FolderScan | null>(null);
+  const [pickScanning, setPickScanning] = useState(false);
+  const [pickTarget, setPickTarget] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
 
   const notify = useCallback((text: string, kind: ToastItem["kind"] = "info") => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -111,20 +127,13 @@ export default function App() {
     [topology],
   );
 
-  /** 每块屏当前壁纸。后端返回的是绝对路径，按 filePath 反查库内记录。 */
-  const wallpaperMap = useMemo(() => {
-    const byPath = new Map(wallpapers.map((w) => [normalize(w.filePath), w]));
-    const map = new Map<string, Wallpaper>();
-    // 系统当前壁纸可能不来自本库（用户曾手动设置），
-    // 这种情况找不到对应记录，画布显示空屏占位，属预期行为。
-    for (const m of monitors) {
-      if (m.currentWallpaper) {
-        const hit = byPath.get(normalize(m.currentWallpaper));
-        if (hit) map.set(m.identity, hit);
-      }
-    }
-    return map;
-  }, [monitors, wallpapers]);
+  /**
+   * 每块屏当前实际展示的壁纸。
+   *
+   * 系统壁纸未必来自本库（用户可能用系统设置换过图），
+   * 因此由 hook 同时处理「库里命中」与「库外解码预览」两条路径。
+   */
+  const screenWallpapers = useScreenWallpapers(monitors, wallpapers);
 
   const folderById = useMemo(() => {
     const map = new Map<string, FolderNode>();
@@ -150,11 +159,14 @@ export default function App() {
     [wallpapers, activeId],
   );
 
+  /** 正在被某块屏使用的库内壁纸 id，用于在卡片上打「使用中」角标。 */
   const activeIds = useMemo(() => {
     const s = new Set<string>();
-    for (const w of wallpaperMap.values()) s.add(w.id);
+    for (const w of screenWallpapers.values()) {
+      if (w.kind === "library") s.add(w.wallpaper.id);
+    }
     return s;
-  }, [wallpaperMap]);
+  }, [screenWallpapers]);
 
   // 选中变化时刷新比例提示，帮助用户在点「应用」前就知道会不会被裁
   useEffect(() => {
@@ -204,6 +216,15 @@ export default function App() {
 
   const applyAll = useCallback(() => {
     if (!activeId) return;
+    // 面板主按钮：有选中屏时作用于选中屏，否则作用于全部
+    if (selected.size > 0) {
+      const ids = Array.from(selected);
+      void runApply(
+        () => api.applyWallpaper(activeId, { type: "identities", value: ids }, position),
+        `已应用到 ${ids.length} 块屏幕`,
+      );
+      return;
+    }
     void runApply(
       () =>
         api.applyWallpaper(
@@ -213,7 +234,7 @@ export default function App() {
         ),
       "已应用到所有屏幕",
     );
-  }, [activeId, position, runApply, showVirtual]);
+  }, [activeId, position, runApply, selected, showVirtual]);
 
   const applySelected = useCallback(() => {
     if (!activeId || selected.size === 0) return;
@@ -318,6 +339,66 @@ export default function App() {
       setImporting(false);
     }
   }, [notify, refreshAll, scope]);
+
+  // ---------------- 添加本机文件夹 ----------------
+
+  /** 打开「添加本机文件夹」弹窗，默认归入当前浏览的合集。 */
+  const openFolderImport = useCallback(() => {
+    setPickPath("");
+    setPickScan(null);
+    setPickError(null);
+    setPickTarget(scope.kind === "folder" ? scope.id : null);
+    setDialog({ kind: "import-folder" });
+  }, [scope]);
+
+  const chooseFolder = useCallback(async () => {
+    setPickError(null);
+    try {
+      const picked = await open({ directory: true, multiple: false });
+      if (!picked || Array.isArray(picked)) return;
+      setPickPath(picked);
+      setPickScan(null);
+      setPickScanning(true);
+      try {
+        setPickScan(await api.libraryScanFolder(picked));
+      } catch (e) {
+        setPickError((e as Error).message);
+      } finally {
+        setPickScanning(false);
+      }
+    } catch (e) {
+      setPickError((e as Error).message);
+    }
+  }, []);
+
+  const runFolderImport = useCallback(async () => {
+    if (!pickPath) return;
+    setImporting(true);
+    setPickError(null);
+    try {
+      const report = await api.libraryImportFolder(pickPath, pickTarget);
+      await refreshAll();
+
+      const parts = [`新增 ${report.added} 张`];
+      if (report.skipped > 0) parts.push(`跳过 ${report.skipped} 张（已在库中）`);
+      if (report.failed.length > 0) parts.push(`失败 ${report.failed.length} 张`);
+      notify(parts.join("，"), report.failed.length > 0 ? "warn" : "success");
+      if (report.failed.length > 0) notify(report.failed[0].reason, "error");
+
+      setDialog({ kind: "none" });
+      // 导入完成后切到目标合集，让用户立刻看到结果
+      if (pickTarget) {
+        setScope({ kind: "folder", id: pickTarget, recursive: true });
+      } else {
+        setScope({ kind: "all" });
+      }
+      setView("library");
+    } catch (e) {
+      setPickError((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  }, [notify, pickPath, pickTarget, refreshAll]);
 
   // ---------------- 合集操作 ----------------
 
@@ -472,7 +553,7 @@ export default function App() {
                 </div>
                 <TopologyCanvas
                   topology={topology ? { ...topology, monitors } : null}
-                  wallpaperMap={wallpaperMap}
+                  wallpaperMap={screenWallpapers}
                   selected={selected}
                   onToggleSelect={toggleSelect}
                   onDropWallpaper={handleDropWallpaper}
@@ -493,6 +574,7 @@ export default function App() {
                 onDelete={(w) => setDialog({ kind: "delete-wallpaper", wallpaper: w })}
                 onMove={(w) => setDialog({ kind: "move", wallpaper: w })}
                 onImport={() => void handleImport()}
+                onImportFolder={openFolderImport}
                 importing={importing}
                 scopeTitle={scopeTitle}
                 scopeHint={scopeHint}
@@ -512,6 +594,7 @@ export default function App() {
                 onDelete={(w) => setDialog({ kind: "delete-wallpaper", wallpaper: w })}
                 onMove={(w) => setDialog({ kind: "move", wallpaper: w })}
                 onImport={() => void handleImport()}
+                onImportFolder={openFolderImport}
                 importing={importing}
                 scopeTitle={scopeTitle}
                 scopeHint={scopeHint}
@@ -541,7 +624,13 @@ export default function App() {
           )}
 
           {view === "sources" && (
-            <SourcesView onError={(msg) => notify(msg, "error")} />
+            <SourcesView
+              onOpenExternal={(url) => {
+                void openUrl(url).catch((e) =>
+                  notify(`无法打开链接：${(e as Error).message ?? e}`, "error"),
+                );
+              }}
+            />
           )}
 
           {view === "settings" && (
@@ -559,7 +648,8 @@ export default function App() {
         <MonitorPanel
           monitors={monitors}
           selected={selected}
-          activeWallpaper={activeWallpaper}
+          wallpaperMap={screenWallpapers}
+          pendingWallpaper={activeWallpaper}
           position={position}
           onPositionChange={setPosition}
           fitMessage={fitMessage}
@@ -567,9 +657,9 @@ export default function App() {
           onApplySelected={applySelected}
           onApplySpan={applySpan}
           busy={busy}
-          wallpaperMap={wallpaperMap}
           onClearSelection={() => setSelected(new Set())}
           onToggleSelect={toggleSelect}
+          onRefresh={() => void refreshTopology()}
         />
       </div>
 
@@ -632,14 +722,27 @@ export default function App() {
         />
       )}
 
+      {dialog.kind === "import-folder" && (
+        <FolderImportDialog
+          title="添加本机文件夹"
+          description="选择一个本机文件夹，其中的图片（含子文件夹）会被扫描并复制进壁纸库。原始文件不会被修改或删除。"
+          folders={folders}
+          path={pickPath}
+          scan={pickScan}
+          scanning={pickScanning}
+          busy={importing}
+          targetFolderId={pickTarget}
+          onTargetFolderChange={setPickTarget}
+          onPickPath={() => void chooseFolder()}
+          onCancel={() => setDialog({ kind: "none" })}
+          onConfirm={() => void runFolderImport()}
+          error={pickError}
+        />
+      )}
+
       <Toast items={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
   );
-}
-
-/** 路径规范化，用于跨大小写与分隔符比较（Windows 路径大小写不敏感）。 */
-function normalize(p: string): string {
-  return p.replace(/\//g, "\\").toLowerCase();
 }
 
 /** 收集某个合集自身及所有后代的 id，用于前端穿透过滤。 */

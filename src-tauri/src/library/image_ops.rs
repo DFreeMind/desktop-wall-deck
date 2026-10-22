@@ -19,8 +19,18 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 
 use super::error::{LibError, LibResult};
 
-/// 缩略图长边尺寸。列表视图按 220px 渲染，2 倍屏足够。
-pub const THUMB_EDGE: u32 = 440;
+/// 缩略图长边尺寸。
+///
+/// 网格卡片在 1440px 宽的窗口里通常渲染成 240–320px 宽，2 倍屏需要 640px
+/// 才不发虚；固定 440 会让高分屏上明显糊。取 640 是清晰度与库体积的平衡点
+/// （单张约 60–120KB PNG）。
+///
+/// 缩略图只用于列表展示，不影响投放——投放始终用原图规范化副本。
+pub const THUMB_EDGE: u32 = 640;
+
+/// 当前壁纸预览图的长边。画布上的屏幕可能只有一两百像素高，
+/// 480 足够覆盖 2 倍屏，且单张 base64 约 30–80KB，逐屏传输无压力。
+pub const PREVIEW_EDGE: u32 = 480;
 
 /// 支持的源文件扩展名（小写，不含点）。
 pub const SUPPORTED_EXT: &[&str] = &[
@@ -82,15 +92,81 @@ pub fn load_oriented(path: &Path) -> LibResult<DynamicImage> {
 
 /// 生成缩略图字节（PNG），长边不超过 `THUMB_EDGE`。
 ///
-/// 使用 `thumbnail` 而非 `resize`：前者是面积平均采样，缩小时不会出现锯齿。
+/// # 为什么用 `resize` + LANCZOS 而不是 `thumbnail`
+///
+/// `thumbnail` 内部是 `resize_exact` 的快速近似（area 采样），对大幅缩小
+/// 够用，但缩略图尺寸常落在 1/3 ~ 1/2 这种「缩得不多」的区间，
+/// 快速采样会让细密纹理（树叶、星点）出现摩尔纹与锯齿，观感发糊。
+/// LANCZOS3 在缩小场景下锐度最好，单张多花几毫秒，换来肉眼可见的清晰度提升。
+///
+/// 用 `resize` 而非 `resize_exact`：保持宽高比，避免壁纸被拉变形。
 pub fn make_thumbnail(img: &DynamicImage) -> LibResult<Vec<u8>> {
-    let thumb = img.thumbnail(THUMB_EDGE, THUMB_EDGE);
+    make_thumbnail_at(img, THUMB_EDGE)
+}
+
+/// 按指定长边生成 PNG 缩略图字节。
+pub fn make_thumbnail_at(img: &DynamicImage, edge: u32) -> LibResult<Vec<u8>> {
+    let (w, h) = (img.width(), img.height());
+    let thumb = if w <= edge && h <= edge {
+        // 原图本来就小，重采样只会引入模糊，直接原样输出
+        img.clone()
+    } else {
+        img.resize(edge, edge, image::imageops::FilterType::Lanczos3)
+    };
+
     let mut buf = std::io::Cursor::new(Vec::new());
     thumb
         .write_to(&mut buf, ImageFormat::Png)
         .map_err(|e| LibError::Encode(format!("缩略图编码失败：{e}")))?;
     Ok(buf.into_inner())
 }
+
+/// 生成「当前壁纸」的 data URL，供前端直接内嵌显示。
+///
+/// # 为什么不走 asset 协议
+///
+/// 系统当前壁纸的路径不由本应用掌控，可能是：
+///
+/// - `%APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper`（无扩展名）
+/// - Windows 聚焦壁纸的 `...\Themes\CachedFiles\*.jpg`
+/// - 用户在别处随便选的一张图，甚至网络驱动器上的文件
+///
+/// 这些路径要么不在 `assetProtocol.scope` 白名单里，要么没有扩展名导致
+/// WebView 猜不出 MIME，加载会静默失败（`<img>` 不报错，只是空白）。
+/// 与其放开 scope 到全盘，不如在后端解码一次、按需要缩小后以 data URL 返回：
+/// 体积可控、不依赖白名单、也不会把用户任意文件暴露给前端。
+pub fn make_preview_data_url(path: &Path) -> LibResult<String> {
+    let img = image::open(path)
+        .map_err(|e| LibError::Decode(format!("{}：{e}", path.display())))?;
+    let bytes = make_thumbnail_at(&img, PREVIEW_EDGE)?;
+    Ok(format!("data:image/png;base64,{}", base64_encode(&bytes)))
+}
+
+/// 标准 Base64 编码（RFC 4648，带 `=` 填充）。
+///
+/// 只为把预览图塞进 data URL，用途单一。引入 `base64` crate 也行，
+/// 但为了这三十行新增一个依赖不划算，且这里没有流式、URL-safe 等需求。
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        // 不足三个字节时补 '='，解码端据此判断尾部
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+
 
 /// 规范化后的存储格式。
 ///
@@ -251,5 +327,27 @@ mod tests {
         assert!(is_supported(Path::new("a.JPG")));
         assert!(is_supported(Path::new("b.Png")));
         assert!(!is_supported(Path::new("c.txt")));
+    }
+
+    #[test]
+    fn base64编码尾部填充正确() {
+        // 三种长度分别对应「无填充 / 补一个 = / 补两个 =」，
+        // 这是手写编码器最容易写错的位置
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn 小图生成缩略图不被放大() {
+        // 原图小于目标长边时应保持原尺寸，否则会被重采样糊掉
+        let img = DynamicImage::new_rgb8(40, 30);
+        let bytes = make_thumbnail_at(&img, THUMB_EDGE).expect("生成缩略图");
+        let back = image::load_from_memory(&bytes).expect("解码");
+        assert_eq!((back.width(), back.height()), (40, 30));
     }
 }

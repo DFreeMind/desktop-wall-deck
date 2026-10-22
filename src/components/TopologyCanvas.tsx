@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { assetUrl } from "../lib/api";
-import type { Monitor, Topology, Wallpaper } from "../lib/types";
+import type { Monitor, ScreenWallpaper, Topology } from "../lib/types";
 import { isPortrait, monitorAspect, monitorSize } from "../lib/types";
 
 interface Props {
   topology: Topology | null;
-  /** 每块屏当前使用的壁纸；找不到时说明系统壁纸不是本库的文件 */
-  wallpaperMap: Map<string, Wallpaper>;
+  /** 每块屏当前实际展示的壁纸；没有条目表示该屏当前无壁纸 */
+  wallpaperMap: Map<string, ScreenWallpaper>;
   selected: Set<string>;
   onToggleSelect: (identity: string, additive: boolean) => void;
   onDropWallpaper: (wallpaperId: string, identities: string[], applyAll: boolean) => void;
@@ -153,7 +152,11 @@ export function TopologyCanvas({
         const isSelected = selected.has(monitor.identity);
         const isHover = hover === monitor.identity;
         const isDragOver = dragOver === monitor.identity;
-        const wp = wallpaperMap.get(monitor.identity);
+        const sw = wallpaperMap.get(monitor.identity);
+        // 只有真正拿到预览图才算「有壁纸」，否则仍按空屏渲染占位，
+        // 避免出现「有壁纸但显示为空灰色块」的半吊子状态
+        const hasImage = !!sw && sw.preview !== null;
+        const isLibrary = sw?.kind === "library";
         const { w, h } = monitorSize(monitor);
         const tall = isPortrait(monitor);
         /** 屏幕太小时隐藏次级信息，否则文字会糊成一团 */
@@ -178,7 +181,7 @@ export function TopologyCanvas({
               isSelected ? "is-selected" : "",
               isHover ? "is-hover" : "",
               isDragOver ? "is-dragover" : "",
-              wp ? "has-wallpaper" : "is-blank",
+              hasImage ? "has-wallpaper" : "is-blank",
               compact ? "is-compact" : "",
               tiny ? "is-tiny" : "",
             ]
@@ -190,8 +193,7 @@ export function TopologyCanvas({
               width,
               height,
               // 壁纸用作底色，让用户一眼看到当前状态
-              backgroundImage: wp ? `url("${assetUrl(wp.filePath)}")` : undefined,
-              // 竖屏在缩略图里经常被误认成横屏，用角标明示比例
+              backgroundImage: hasImage ? `url("${sw!.preview}")` : undefined,
             }}
             onMouseEnter={() => setHover(monitor.identity)}
             onMouseLeave={() => setHover(null)}
@@ -203,9 +205,15 @@ export function TopologyCanvas({
             }}
             onDragLeave={() => setDragOver((d) => (d === monitor.identity ? null : d))}
             onDrop={(e) => handleDrop(monitor, e)}
-            title={`${monitor.name} · ${w}×${h}${wp ? ` · ${wp.name}` : " · 未设置壁纸"}`}
+            title={`${monitor.name} · ${w}×${h}${
+              !sw
+                ? " · 未设置壁纸"
+                : isLibrary
+                  ? ` · ${sw.wallpaper.name}`
+                  : " · 当前壁纸来自系统（不在库中）"
+            }`}
           >
-            {!wp && (
+            {!hasImage && (
               <div className="screen-blank-inner">
                 {showBlankGlyph && (
                   <span className="screen-blank-mark">
@@ -214,29 +222,31 @@ export function TopologyCanvas({
                 )}
                 {showBlankHint ? (
                   <span className="screen-blank-text">
-                    未设置
-                    <button
-                      className="screen-blank-cta"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onPickFor(monitor.identity);
-                      }}
-                    >
-                      选一张
-                    </button>
+                    {sw ? "无预览" : "未设置"}
+                    {!sw && (
+                      <button
+                        className="screen-blank-cta"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPickFor(monitor.identity);
+                        }}
+                      >
+                        选一张
+                      </button>
+                    )}
                   </span>
                 ) : (
                   /* 放不下按钮时给一句更短的水印，让空屏看起来是「有意的空」而非加载失败 */
                   !tiny && (
                     <span className="screen-blank-note" aria-hidden>
-                      未设置
+                      {sw ? "无预览" : "未设置"}
                     </span>
                   )
                 )}
               </div>
             )}
 
-            {wp && <div className="screen-shade" />}
+            {hasImage && <div className="screen-shade" />}
 
             <div className="screen-label">
               <span className="screen-name">{monitor.name}</span>
@@ -246,7 +256,8 @@ export function TopologyCanvas({
                   {tall ? " · 竖" : ""}
                 </span>
               )}
-            </div>            {monitor.primary && <div className="screen-tag screen-tag-primary">主屏</div>}
+            </div>
+            {monitor.primary && <div className="screen-tag screen-tag-primary">主屏</div>}
             {monitor.kind === "virtual" && (
               <div className="screen-tag screen-tag-virtual">虚拟</div>
             )}

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::library::{image_ops, Folder, FolderNode, ImportReport, Wallpaper};
+use crate::library::{image_ops, Folder, FolderNode, FolderScan, ImportReport, Wallpaper};
 use crate::state::AppState;
 use crate::wallpaper::identity::build_monitors;
 use crate::wallpaper::{Position, Topology};
@@ -381,6 +381,60 @@ pub fn library_move_to_folder(
         .map_err(err)?;
     let _ = app.emit("library://changed", ());
     Ok(())
+}
+
+// ---------------------------------------------------------------- 本机文件夹来源
+
+/// 预扫描本机目录，返回会导入的图片数量，不写任何数据。
+#[tauri::command]
+pub fn library_scan_folder(state: State<'_, AppState>, path: String) -> Result<FolderScan, String> {
+    state
+        .library
+        .scan_folder(std::path::Path::new(&path))
+        .map_err(err)
+}
+
+/// 把本机目录（递归）导入壁纸库。`folder_id` 指定归属合集，`None` 为库根目录。
+#[tauri::command]
+pub fn library_import_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    folder_id: Option<String>,
+) -> Result<ImportReport, String> {
+    let report = state
+        .library
+        .import_folder(std::path::Path::new(&path), folder_id.as_deref())
+        .map_err(err)?;
+    let _ = app.emit("library://changed", ());
+    Ok(report)
+}
+
+/// 补齐缺失的缩略图，返回修复数量。启动后调用一次，做到静默自愈。
+#[tauri::command]
+pub fn library_repair_thumbnails(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let fixed = state.library.repair_thumbnails().map_err(err)?;
+    if fixed > 0 {
+        // 缩略图变了，通知前端重新拉取，避免继续显示空块
+        let _ = app.emit("library://changed", ());
+    }
+    Ok(fixed)
+}
+
+/// 把任意本地图片转成可直接内嵌的 data URL。
+///
+/// 用于展示「系统当前壁纸」——它可能不在库内、不在 asset 白名单内，
+/// 甚至没有扩展名，前端无法通过 asset 协议加载。详见 `image_ops::make_preview_data_url`。
+#[tauri::command]
+pub fn current_wallpaper_preview(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("壁纸文件不存在".into());
+    }
+    image_ops::make_preview_data_url(p).map_err(err)
 }
 
 // ---------------------------------------------------------------- 辅助信息

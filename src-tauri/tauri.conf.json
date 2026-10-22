@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; frame-src https://unsplash.com https://*.unsplash.com https://wallhaven.cc https://*.wallhaven.cc https://commons.wikimedia.org https://*.wikimedia.org https://www.desktopography.net https://images.nasa.gov https://*.nasa.gov https://www.pexels.com",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/**", "$APPLOCALDATA/**", "$TEMP/**"]

@@ -92,6 +92,30 @@ export interface ImportReport {
   failed: { path: string; reason: string }[];
 }
 
+/** 本机目录预扫描结果。`total - alreadyInLibrary` 才是导入后会新增的张数。 */
+export interface FolderScan {
+  path: string;
+  total: number;
+  alreadyInLibrary: number;
+}
+
+/**
+ * 一块屏当前展示的壁纸。
+ *
+ * 之所以需要这个包装类型：系统当前壁纸未必来自本库。库里有的图可以直接
+ * 走 asset 协议按路径加载；库里没有的图（用户手动设的、Windows 聚焦的）
+ * 只能靠后端解码成 data URL。两者共用同一套「画面上显示什么」的逻辑，
+ * 用联合类型明确区分来源，比在组件里到处判断「有没有命中库」更清楚。
+ */
+export type ScreenWallpaper =
+  | { kind: "library"; wallpaper: Wallpaper; preview: string }
+  | { kind: "external"; preview: string | null };
+
+/** 判断是否为系统外部壁纸（用于「非本库图片」这类提示文案）。 */
+export function isExternal(w: ScreenWallpaper | undefined): boolean {
+  return !!w && w.kind === "external";
+}
+
 export interface FitAdvice {
   needsCrop: boolean;
   message: string;

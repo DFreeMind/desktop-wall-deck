@@ -1,13 +1,15 @@
-import { assetUrl } from "../lib/api";
-import type { Monitor, Position, Wallpaper } from "../lib/types";
+import type { Monitor, Position, ScreenWallpaper, Wallpaper } from "../lib/types";
 import { POSITION_LABELS, isPortrait, monitorSize } from "../lib/types";
-import { IconCheck, IconLayers, IconMonitor } from "./icons";
-import { formatBytes } from "./WallpaperGrid";
+import { assetUrl } from "../lib/api";
+import { IconCheck, IconLayers, IconMonitor, IconRefresh } from "./icons";
 
 interface Props {
   monitors: Monitor[];
   selected: Set<string>;
-  activeWallpaper: Wallpaper | null;
+  /** 每块屏当前实际展示的壁纸 */
+  wallpaperMap: Map<string, ScreenWallpaper>;
+  /** 用户在壁纸库里选中的待投放壁纸 */
+  pendingWallpaper: Wallpaper | null;
   position: Position;
   onPositionChange: (p: Position) => void;
   fitMessage: string | null;
@@ -15,11 +17,11 @@ interface Props {
   onApplySelected: () => void;
   onApplySpan: () => void;
   busy: boolean;
-  /** 每块屏当前使用的壁纸，用于在屏幕清单里显示缩略图 */
-  wallpaperMap: Map<string, Wallpaper>;
   onClearSelection: () => void;
   /** 与画布共用同一套选择语义（点击切换、按住 Ctrl 追加） */
   onToggleSelect: (identity: string, additive: boolean) => void;
+  /** 刷新显示器信息，用于「当前壁纸来自系统」时重新同步 */
+  onRefresh: () => void;
 }
 
 const POSITIONS: Position[] = ["fill", "fit", "stretch", "center", "tile"];
@@ -27,20 +29,22 @@ const POSITIONS: Position[] = ["fill", "fit", "stretch", "center", "tile"];
 /**
  * 右侧属性面板。
  *
- * 信息层级自下而上分四块，每块之间用留白和细分隔线分层：
+ * 分四块，自上而下回答四个问题：
  *
- *   1. 待设置对象（哪块屏 / 哪张图）—— 先说清楚「在操作什么」
- *   2. 主操作（三个投放动作）—— 面板里唯一的实心按钮
- *   3. 填充方式（分段控件）—— 次要选项
- *   4. 屏幕清单 —— 状态总览，可在此直接切选
+ *   1. 现在显示什么（当前壁纸预览）
+ *   2. 接下来要放什么、放到哪（待投放壁纸 + 三个动作）
+ *   3. 怎么铺（填充方式）
+ *   4. 每块屏分别是什么状态（屏幕清单）
  *
- * 把「比例风险提示」贴在主操作下方而不是最底部，
- * 因为它是用户设置完才发现问题的高频来源，必须紧挨着决策点。
+ * 「当前壁纸」与「待投放壁纸」是两件事，必须分开呈现：
+ * 用户刚打开应用时想知道的是桌面现状，而投放动作的宾语是他在库里挑的那张图。
+ * 把两者混成同一个预览框，会导致「面板显示 A，点应用却设成 B」的困惑。
  */
 export function MonitorPanel({
   monitors,
   selected,
-  activeWallpaper,
+  wallpaperMap,
+  pendingWallpaper,
   position,
   onPositionChange,
   fitMessage,
@@ -48,59 +52,78 @@ export function MonitorPanel({
   onApplySelected,
   onApplySpan,
   busy,
-  wallpaperMap,
   onClearSelection,
   onToggleSelect,
+  onRefresh,
 }: Props) {
   const selectedMonitors = monitors.filter((m) => selected.has(m.identity));
   const single = selectedMonitors.length === 1 ? selectedMonitors[0] : null;
   const physical = monitors.filter((m) => m.kind !== "virtual");
 
-  const canSpan = physical.length >= 2 && !!activeWallpaper;
-  const canApply = !!activeWallpaper && !busy;
+  /** 当前壁纸预览的焦点屏：选中单块时看那块，否则看主屏 */
+  const focusMonitor = single ?? monitors.find((m) => m.primary) ?? monitors[0] ?? null;
+  const focusWallpaper = focusMonitor ? wallpaperMap.get(focusMonitor.identity) : undefined;
+
+  const setCount = monitors.filter((m) => wallpaperMap.get(m.identity)?.preview).length;
+  const hasTarget = selectedMonitors.length > 0;
+  const canApply = !!pendingWallpaper && !busy;
+  const canSpan = physical.length >= 2 && !!pendingWallpaper && !busy;
 
   return (
     <aside className="panel">
-      {/* ---- 1. 当前壁纸 ---- */}
-      <section className="panel-block panel-preview">
-        {activeWallpaper ? (
+      {/* ---- 1. 当前显示 ---- */}
+      <section className="panel-block panel-current">
+        {focusWallpaper?.preview ? (
           <>
-            <div className="preview-frame">
-              <img src={assetUrl(activeWallpaper.filePath)} alt={activeWallpaper.name} />
+            <div className="current-frame">
+              <img src={focusWallpaper.preview} alt="" />
+              <span className="current-tag">
+                {focusWallpaper.kind === "library" ? "库内" : "系统"}
+              </span>
             </div>
-            <div className="preview-meta">
-              <h2 className="preview-name" title={activeWallpaper.name}>
-                {activeWallpaper.name}
-              </h2>
-              <p className="preview-sub">
-                {activeWallpaper.width}×{activeWallpaper.height}
-                <span className="dot" />
-                {formatBytes(activeWallpaper.bytes)}
-                <span className="dot" />
-                {ratioLabel(activeWallpaper.width, activeWallpaper.height)}
-              </p>
+            <div className="current-meta">
+              <span className="current-name">
+                {focusWallpaper.kind === "library"
+                  ? focusWallpaper.wallpaper.name
+                  : "非库内图片"}
+              </span>
+              <span className="current-screen">{focusMonitor?.name ?? ""}</span>
             </div>
           </>
         ) : (
-          <div className="preview-empty">
-            <span className="preview-empty-icon">
-              <IconLayers size={22} />
+          <div className="current-empty">
+            <span className="current-empty-icon">
+              <IconLayers size={20} />
             </span>
-            <p className="preview-empty-title">未选择壁纸</p>
-            <p className="preview-empty-hint">
-              点下方任意一张图，即可设为壁纸；也可以把它拖到上方的屏幕上
-            </p>
+            <div className="current-empty-text">
+              <span className="current-empty-title">
+                {focusWallpaper ? "预览不可用" : "这块屏还没有壁纸"}
+              </span>
+              <span className="current-empty-hint">
+                {focusWallpaper
+                  ? "原文件可能已被移动或删除"
+                  : "从下方壁纸库挑一张，拖到屏幕上即可"}
+              </span>
+            </div>
+            {focusWallpaper && (
+              <button className="icon-plain" onClick={onRefresh} title="重新读取">
+                <IconRefresh size={13} />
+              </button>
+            )}
           </div>
         )}
       </section>
 
-      {/* ---- 2. 目标与主操作 ---- */}
+      {/* ---- 2. 待投放 + 主操作 ---- */}
       <section className="panel-block">
         <div className="panel-label">
           {single ? (
             <>
               目标屏幕
               <strong>{single.name}</strong>
+              <button className="link-btn" onClick={onClearSelection}>
+                取消
+              </button>
             </>
           ) : selectedMonitors.length > 1 ? (
             <>
@@ -111,36 +134,54 @@ export function MonitorPanel({
               </button>
             </>
           ) : (
-            <span className="panel-label-plain">目标屏幕 · 未选择</span>
+            <span className="panel-label-plain">目标屏幕 · 未选择（将作用于全部）</span>
+          )}
+        </div>
+
+        <div className={`pending${pendingWallpaper ? " is-set" : ""}`}>
+          {pendingWallpaper ? (
+            <>
+              <span className="pending-thumb">
+                <img src={assetUrl(pendingWallpaper.thumbPath)} alt="" />
+              </span>
+              <span className="pending-info">
+                <span className="pending-name" title={pendingWallpaper.name}>
+                  {pendingWallpaper.name}
+                </span>
+                <span className="pending-meta">
+                  {pendingWallpaper.width}×{pendingWallpaper.height} ·{" "}
+                  {ratioLabel(pendingWallpaper.width, pendingWallpaper.height)}
+                </span>
+              </span>
+            </>
+          ) : (
+            <span className="pending-hint">在下方壁纸库中点击一张图</span>
           )}
         </div>
 
         <button className="action-primary" onClick={onApplyAll} disabled={!canApply}>
-          {activeWallpaper
-            ? selectedMonitors.length > 0
-              ? `应用到全部 ${physical.length} 块屏`
+          {pendingWallpaper
+            ? hasTarget
+              ? `应用到选中 ${selectedMonitors.length} 块屏`
               : `应用到全部 ${physical.length} 块屏`
-            : "选择一张壁纸后应用"}
+            : "先选一张壁纸"}
         </button>
 
         <button
           className="action-secondary"
           onClick={onApplySelected}
-          disabled={!canApply || selectedMonitors.length === 0}
+          disabled={!canApply || !hasTarget}
         >
           <IconMonitor size={14} />
           仅应用到选中屏幕
-          {selectedMonitors.length > 0 && <span className="kbd">{selectedMonitors.length}</span>}
+          {hasTarget && <span className="kbd">{selectedMonitors.length}</span>}
         </button>
 
-        <button className="action-secondary" onClick={onApplySpan} disabled={!canSpan || busy}>
+        <button className="action-secondary" onClick={onApplySpan} disabled={!canSpan}>
           <IconLayers size={14} />
           跨屏拼接铺满 {physical.length} 块屏
         </button>
 
-        {!canSpan && physical.length >= 2 && !activeWallpaper && (
-          <p className="panel-hint">跨屏拼接需要先在壁纸库中选一张图</p>
-        )}
         {fitMessage && <div className="fit-warn">{fitMessage}</div>}
       </section>
 
@@ -167,27 +208,31 @@ export function MonitorPanel({
       <section className="panel-block panel-screens">
         <div className="panel-label">
           屏幕状态
-          <span className="panel-label-tail">{monitors.length}</span>
+          <span className="panel-label-tail">
+            {setCount}/{monitors.length}
+          </span>
         </div>
         <ul className="screen-list">
           {monitors.map((m) => {
             const on = selected.has(m.identity);
-            const wp = wallpaperMap.get(m.identity);
+            const sw = wallpaperMap.get(m.identity);
             const { w, h } = monitorSize(m);
+            const label =
+              sw?.kind === "library" ? sw.wallpaper.name : sw ? "系统壁纸" : "未设置";
             return (
               <li
                 key={m.identity}
                 className={`screen-row${on ? " is-on" : ""}`}
                 onClick={(e) => onToggleSelect(m.identity, e.ctrlKey || e.metaKey)}
-                title={wp ? `当前：${wp.name}` : "当前未设置本库中的壁纸"}
+                title={`当前：${label}`}
               >
                 <span
                   className="screen-thumb"
                   style={{
                     aspectRatio: `${w} / ${h}`,
-                    backgroundImage: wp ? `url("${assetUrl(wp.thumbPath)}")` : undefined,
+                    backgroundImage: sw?.preview ? `url("${sw.preview}")` : undefined,
                   }}
-                  data-blank={wp ? undefined : "true"}
+                  data-blank={sw?.preview ? undefined : "true"}
                 />
                 <span className="screen-info">
                   <span className="screen-row-name">{m.name}</span>
@@ -198,8 +243,8 @@ export function MonitorPanel({
                     {m.kind === "virtual" ? " · 虚拟" : ""}
                   </span>
                 </span>
-                <span className={`screen-state${wp ? " is-set" : ""}`}>
-                  {wp ? <IconCheck size={11} /> : "空"}
+                <span className={`screen-state${sw?.preview ? " is-set" : ""}`}>
+                  {sw?.preview ? <IconCheck size={11} /> : "空"}
                 </span>
               </li>
             );

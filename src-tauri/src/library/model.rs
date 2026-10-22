@@ -77,3 +77,16 @@ pub struct ImportFailure {
     pub path: String,
     pub reason: String,
 }
+
+/// 目录预扫描结果。
+///
+/// `total` 是扫描到的图片总数（含已在库中的），`already_in_library` 是其中
+/// 因源路径已存在而会被跳过的数量。两者之差就是「导入后新增多少」，
+/// 用于在用户确认前把结果说清楚。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderScan {
+    pub path: String,
+    pub total: usize,
+    pub already_in_library: usize,
+}

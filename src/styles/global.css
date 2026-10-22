@@ -6,30 +6,38 @@
  */
 
 :root {
-  --bg: #f7f7f8;
+  /* 底色略偏冷，与白卡片形成更清晰的层次；纯灰会让整屏发闷 */
+  --bg: #f4f5f7;
   --surface: #ffffff;
-  --surface-2: #f1f1f3;
-  --surface-3: #e8e8ec;
-  --border: rgba(0, 0, 0, 0.09);
-  --border-strong: rgba(0, 0, 0, 0.16);
+  --surface-2: #f3f4f6;
+  --surface-3: #e9ebef;
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.14);
 
-  --text: #1c1c1e;
-  --text-2: #6b6b73;
-  --text-3: #9a9aa2;
+  --text: #14171f;
+  --text-2: #5c6270;
+  --text-3: #939aa8;
 
   --accent: #2f6fed;
-  --accent-soft: #e8f0fe;
-  --accent-border: #b9d0fb;
+  --accent-hover: #2563d8;
+  --accent-soft: #eaf1fe;
+  --accent-border: #bcd3fb;
   --danger: #d64545;
   --danger-soft: #fdeceb;
-  --warning: #b0791b;
-  --warning-soft: #fdf5e4;
+  --warning: #a86f14;
+  --warning-soft: #fdf4e3;
   --success: #2e8b57;
   --success-soft: #eaf6ef;
 
   --r-sm: 6px;
-  --r-md: 9px;
-  --r-lg: 13px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  /* 阴影分三档：贴着表面的微影、浮起元素、弹层。
+     统一在此定义，避免各处随手写 rgba 导致深浅不一。 */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-2: 0 4px 16px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --shadow-3: 0 12px 32px rgba(15, 23, 42, 0.14), 0 3px 8px rgba(15, 23, 42, 0.07);
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
     "PingFang SC", "Hiragino Sans GB", sans-serif;

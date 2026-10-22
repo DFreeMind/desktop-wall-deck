@@ -9,10 +9,11 @@
 - 枚举真实显示器，按物理排列绘制拓扑图
 - 为单台显示器、指定多台、或全部显示器设置壁纸
 - 本地壁纸库：导入、扫描、缩略图、删除
+- 从本机任意文件夹批量导入（先扫描报告「新增 N 张」，再确认写入）
 - 多级文件夹（合集）：新建、重命名、删除、按文件夹筛选、穿透查看子文件夹
 - 跨屏拼接：一张图按各屏几何切分后分别投放
 - 显示器热插拔后按逻辑身份恢复映射
-- 知名开源壁纸站外链导航（只跳系统浏览器，不抓取内容）
+- 知名开源壁纸站**应用内浏览**（主从布局 + iframe），外链仅作禁嵌站点的兜底
 
 ## 技术栈
 
@@ -129,6 +130,58 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"]
 
 `.screen-blank-inner` 需留 `padding: 6px 6px 26px` 给底部屏名标签让位。
 
+### 13. 系统当前壁纸必须走后端解码，不能直接用 `assetUrl`
+
+「显示器预览」要显示系统当前正在用的壁纸，但 `GetWallpaper` 返回的路径通常位于
+`%APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper`（**无扩展名**）或
+`Themes\CachedFiles\*.jpg`。这两处都不在 `assetProtocol.scope` 内，且前者没有扩展名时
+WebView 猜不出 MIME，表现是图片静默失败、`naturalWidth === 0`。
+
+正确做法（`current_wallpaper_preview` + `image_ops::make_preview_data_url`）：后端解码任意
+本地图片，缩到 `PREVIEW_EDGE = 480`，编码成 `data:image/png;base64,...` 返回。前端
+`useScreenWallpapers` 的匹配顺序是：
+
+1. 先按 `filePath` 归一化（小写 + 统一分隔符）在库内找记录，命中就用 `assetUrl(thumbPath)`
+2. 未命中再调后端解码为 data URL，结果进 `cacheRef` 复用，并发的相同路径共享同一次请求
+
+**不要**把 `assetProtocol.scope` 放宽到 `$APPDATA\Microsoft` 或 `**`——前者把系统主题目录
+暴露给前端，后者等于取消白名单。
+
+### 14. 缩略图用 LANCZOS3 缩放，且不得放大小图
+
+`THUMB_EDGE = 640`（卡片显示宽度约 152px，@2x 后留足余量）。`make_thumbnail_at` 用
+`resize(edge, edge, Lanczos3)` 而非 `image` crate 的 `thumbnail()`：后者是 area 采样，
+高对比边缘（天空、建筑线条）会明显发糊。同时原图任一边小于目标时保留原尺寸，放大只会
+让文件变大而更模糊。
+
+渲染一律用 `thumbPath`，不要用原图 `filePath`：原图可能几 MB，瀑布流里并发解码会把帧率
+拖垮，这也是「壁纸显示不全 + 卡顿」的常见成因。
+
+启动时 `library.repair_thumbnails()` 会静默补齐缺失或 0 字节的缩略图，属于自愈逻辑，
+不需要用户手动触发。
+
+### 15. 应用内浏览站点的前提是对方允许被 iframe 嵌入
+
+`X-Frame-Options: SAMEORIGIN` / `CSP frame-ancestors` 由其站点决定，前端无法绕过。
+`wallpaperSources.ts` 的 `embeddable` 字段标出可嵌入性，`false` 的站点（如 Pexels）渲染
+`.browser-blocked` 说明并只保留外链兜底，**不能让它白屏**。
+
+另外两个必须保留的细节：
+
+- `tauri.conf.json` 的 CSP 要放行这些域名的 `frame-src`，否则同样被拦
+- 跨域 iframe 的 `onLoad` 不可靠，加载遮罩必须带定时兜底撤销（当前 4.5s），
+  否则用户会卡在一直转圈的状态
+
+### 16. 弹层用 Portal + fixed，不要靠抬高 z-index
+
+「更多操作」菜单原来在卡片内部 `position: absolute`，而瀑布流容器有 `overflow: hidden`。
+`overflow` 裁切发生在绘制阶段，早于 `z-index` 的层叠比较，所以无论把 `z-index` 调到多大
+都会被裁掉。正确做法是 `createPortal(..., document.body)` + `position: fixed`，再用
+`useLayoutEffect` 量出菜单尺寸，贴近视口底部时向上翻转。
+
+关闭监听用 `pointerdown` 而不是 `click`：用 `click` 时，点击菜单项会先触发外部关闭，
+导致点击被吞掉。
+
 ## 工作规范
 
 - 分支开发，不直接改 `main`。功能分支命名 `feature/<主题>`。
@@ -151,7 +204,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 仅单元测试（快�
 
 ## 测试说明
 
-- `--lib` 单元测试：身份解析、虚拟屏识别、比例提示、库导入去重与删除、**文件夹嵌套与穿透查询、删文件夹壁纸上移、同级重名拒绝、移动到文件夹/移回根目录**，全部使用临时目录，无副作用。
+- `--lib` 单元测试：身份解析、虚拟屏识别、比例提示、库导入去重与删除、**文件夹嵌套与穿透查询、删文件夹壁纸上移、同级重名拒绝、移动到文件夹/移回根目录、目录扫描统计、缩略图缺失自愈、base64 编码填充、小图不放大**，全部使用临时目录，无副作用。
 - `tests/e2e_import.rs`：拿 `C:\Users\qiulu\Desktop\imgs\壁纸` 下的真实图片走完整导入链路，
   校验副本格式与体积。样本不存在时自动跳过。
 - `tests/e2e_apply.rs`：**会真实修改桌面壁纸**。只动索引 0 的显示器，且无论断言成败都会恢复原壁纸。
@@ -179,10 +232,18 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 仅单元测试（快�
 | `cargo check` 说找不到 `RegisterClassW` | 缺 `Win32_Graphics_Gdi` feature | 见上文约束 9 |
 | 所有屏壁纸被重置成同一张 | Windows 在显示器断开时的重排行为 | 拓扑监听应重放绑定，检查 `topology_watch` 日志 |
 | 卡片「更多」按钮点不到 | `opacity: 0` 被判为不可见 | 基线用 `opacity: 0.42`，hover/focus 提到 1，另加 `@media (hover: none)` |
+| 当前壁纸预览空白、`naturalWidth === 0` | 系统壁纸路径不在 asset scope 内，或无扩展名 | 见上文约束 13，走后端解码成 data URL |
+| 卡片缩略图发糊 | 用了 area 采样或原图直连 | 见上文约束 14，LANCZOS3 + `thumbPath` |
+| 更多菜单被卡片边界裁掉 | 定位在 `overflow: hidden` 容器内 | 见上文约束 16，Portal + fixed |
+| 壁纸来源页一直转圈 | 跨域 iframe 的 `onLoad` 不触发 | 加载遮罩需带定时兜底（约束 15） |
+| 壁纸来源页白屏 | 站点拒绝被嵌入 | 按 `embeddable` 渲染说明 + 外链兜底（约束 15） |
 
 ## 已知边界
 
 - 仅支持 Windows 8 及以上（`IDesktopWallpaper` 最低要求）
 - 不支持动态壁纸（视频/HTML），需注入宿主进程，不在当前范围
-- 不做壁纸下载与在线资源抓取，只管理本地文件；「壁纸来源」页仅提供外链跳转
+- 不做壁纸下载与在线资源抓取，只管理本地文件；「壁纸来源」页为应用内 iframe 浏览，
+  内容版权与可用性由源站决定，禁嵌站点只能外链跳转
+- 从文件夹导入是**复制**进库（沿用约束 4），不建立软引用；源目录后续变化不会自动同步，
+  需要重新导入（已入库的同路径文件会被去重跳过）
 - 沙箱环境下 WebView2 渲染不可靠，UI 验证走预览 harness（见「前端视觉与交互校验」）
