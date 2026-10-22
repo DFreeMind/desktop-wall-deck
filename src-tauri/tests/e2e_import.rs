@@ -39,7 +39,7 @@ fn 导入真实壁纸并生成缩略图() {
     let _ = std::fs::remove_dir_all(&root);
 
     let lib = test_api::open_library(root.clone()).unwrap();
-    let report = lib.import(&samples).unwrap();
+    let report = lib.import(&samples, None).unwrap();
 
     println!(
         "导入结果：新增 {}，跳过 {}，失败 {}",

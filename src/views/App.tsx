@@ -247,8 +247,8 @@ export default function App() {
 
   const applySpan = useCallback(() => {
     if (!activeId) return;
-    void runApply(() => api.applySpan(activeId, position), "已按屏幕切分拼接");
-  }, [activeId, position, runApply]);
+    void runApply(() => api.applySpan(activeId), "已按屏幕切分拼接");
+  }, [activeId, runApply]);
 
   const handleDropWallpaper = useCallback(
     (wpId: string, identities: string[], applyAllFlag: boolean) => {

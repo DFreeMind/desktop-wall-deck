@@ -10,7 +10,7 @@
 //!    竖拍照片会横着铺满屏幕。必须在入库时按 EXIF 做物理旋转。
 //! 2. **格式支持不全**：webp / avif / heic 等在部分系统版本上设置后变黑屏。
 //!
-//! 因此库内统一规范化为 PNG（无损，避免二次压缩劣化渐变），
+//! 因此库内统一规范化为 JPEG（质量 92），带透明通道时保留 PNG，
 //! 原始文件仅作参考保留，投放时始终使用规范化副本的绝对路径。
 
 use std::path::{Path, PathBuf};
@@ -84,7 +84,10 @@ pub fn load_oriented(path: &Path) -> LibResult<DynamicImage> {
     if !path.exists() {
         return Err(LibError::NotFound(path.display().to_string()));
     }
-    let img = image::open(path)
+    let img = image::ImageReader::open(path)
+        .and_then(|reader| reader.with_guessed_format())
+        .map_err(|e| LibError::Decode(format!("{}：{e}", path.display())))?
+        .decode()
         .map_err(|e| LibError::Decode(format!("{}：{e}", path.display())))?;
     let orientation = read_exif_orientation(path);
     Ok(apply_orientation(img, orientation))
@@ -136,8 +139,7 @@ pub fn make_thumbnail_at(img: &DynamicImage, edge: u32) -> LibResult<Vec<u8>> {
 /// 与其放开 scope 到全盘，不如在后端解码一次、按需要缩小后以 data URL 返回：
 /// 体积可控、不依赖白名单、也不会把用户任意文件暴露给前端。
 pub fn make_preview_data_url(path: &Path) -> LibResult<String> {
-    let img = image::open(path)
-        .map_err(|e| LibError::Decode(format!("{}：{e}", path.display())))?;
+    let img = load_oriented(path)?;
     let bytes = make_thumbnail_at(&img, PREVIEW_EDGE)?;
     Ok(format!("data:image/png;base64,{}", base64_encode(&bytes)))
 }
@@ -248,20 +250,28 @@ pub fn slice_span(
     bounds_w: i32,
     bounds_h: i32,
 ) -> Vec<Slice> {
+    if bounds_w <= 0 || bounds_h <= 0 || source.width() == 0 || source.height() == 0 {
+        return Vec::new();
+    }
     let scale_x = source.width() as f32 / bounds_w.max(1) as f32;
     let scale_y = source.height() as f32 / bounds_h.max(1) as f32;
 
     monitors
         .iter()
         .filter_map(|(path, (l, t, r, b))| {
+            if r <= l || b <= t || *r <= 0 || *b <= 0 || *l >= bounds_w || *t >= bounds_h {
+                return None;
+            }
             let x = (*l as f32 * scale_x).round().max(0.0) as u32;
             let y = (*t as f32 * scale_y).round().max(0.0) as u32;
             let w = ((r - l) as f32 * scale_x).round().max(1.0) as u32;
             let h = ((b - t) as f32 * scale_y).round().max(1.0) as u32;
 
             // 越界裁剪：拼接图宽高比与包围盒不一致时，边缘屏可能算出超界区域
-            let w = w.min(source.width().saturating_sub(x)).max(1);
-            let h = h.min(source.height().saturating_sub(y)).max(1);
+            let x = x.min(source.width() - 1);
+            let y = y.min(source.height() - 1);
+            let w = w.min(source.width() - x);
+            let h = h.min(source.height() - y);
 
             let piece = source.crop_imm(x, y, w, h).to_rgba8();
             Some(Slice { monitor_device_path: path.clone(), image: piece })
@@ -305,9 +315,49 @@ pub fn thumb_file_path(root: &Path, id: &str) -> PathBuf {
     root.join("thumbs").join(prefix).join(format!("{id}.png"))
 }
 
+/// 相同壁纸与布局复用同一批分片，避免反复点击拼接不断累积缓存。
+pub fn span_cache_dir(
+    root: &Path,
+    wallpaper_id: &str,
+    monitors: &[(String, (i32, i32, i32, i32))],
+    bounds_w: i32,
+    bounds_h: i32,
+) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (wallpaper_id, monitors, bounds_w, bounds_h).hash(&mut hasher);
+    root.join("span").join(format!("{:016x}", hasher.finish()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 无扩展名的系统壁纸可解码和预览() {
+        let dir = std::env::temp_dir().join(format!("dwd-preview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("TranscodedWallpaper");
+        DynamicImage::new_rgb8(12, 8).save_with_format(&path, ImageFormat::Jpeg).unwrap();
+        let img = load_oriented(&path).unwrap();
+        assert_eq!((img.width(), img.height()), (12, 8));
+        assert!(make_preview_data_url(&path).unwrap().starts_with("data:image/png;base64,"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn 极小原图跨屏切分不会因舍入越界() {
+        let img = DynamicImage::new_rgb8(1, 1);
+        let monitors = vec![
+            ("left".into(), (0, 0, 1920, 1080)),
+            ("right".into(), (1920, 0, 3840, 1080)),
+            ("invalid".into(), (3840, 0, 3840, 1080)),
+        ];
+        let slices = slice_span(&img, &monitors, 3840, 1080);
+        assert_eq!(slices.len(), 2);
+        assert!(slices.iter().all(|s| s.image.dimensions() == (1, 1)));
+        assert!(slice_span(&img, &monitors, 0, 1080).is_empty());
+    }
 
     #[test]
     fn 比例匹配时不提示裁切() {

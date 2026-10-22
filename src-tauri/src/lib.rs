@@ -102,6 +102,29 @@ pub fn run() {
             }
 
             app.manage(state);
+
+            // —— 诊断：确认 WebView 是否真的加载了内嵌前端资源 ——
+            // 仅在设置 DW_DEBUG_WEBVIEW=1 时输出，避免污染正常日志。
+            if std::env::var("DW_DEBUG_WEBVIEW").is_ok() {
+                use tauri::Manager as _;
+                if let Some(win) = app.get_webview_window("main") {
+                    eprintln!("[diag] 窗口存在: {}", win.label());
+                    eprintln!("[diag] 当前 URL: {:?}", win.url());
+                    let w2 = win.clone();
+                    std::thread::spawn(move || {
+                        for i in 0..8 {
+                            std::thread::sleep(std::time::Duration::from_millis(800));
+                            let url = w2.url().map(|u| u.to_string()).unwrap_or_default();
+                            eprintln!("[diag] t={}ms url={}", (i + 1) * 800, url);
+                            if url.starts_with("http") && !url.contains("localhost:1420") {
+                                break;
+                            }
+                        }
+                    });
+                } else {
+                    eprintln!("[diag] 拿不到 main 窗口");
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

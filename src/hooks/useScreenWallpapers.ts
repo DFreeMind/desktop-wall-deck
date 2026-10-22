@@ -28,8 +28,8 @@ export function useScreenWallpapers(
   /** path → dataURL；用 ref 存缓存，避免每次渲染重建对象 */
   const cacheRef = useRef(new Map<string, string | null>());
   /** 记录发起中的请求，防止同一条路径被并发解码多次 */
-  const inflightRef = useRef(new Set<string>());
-  const [, forceRender] = useState(0);
+  const inflightRef = useRef(new Map<string, Promise<void>>());
+  const [previewVersion, forceRender] = useState(0);
 
   const byPath = useMemo(() => {
     const m = new Map<string, Wallpaper>();
@@ -63,7 +63,7 @@ export function useScreenWallpapers(
       });
     }
     return out;
-  }, [monitors, byPath]);
+  }, [monitors, byPath, previewVersion]);
 
   // 为所有未命中库的外部壁纸补齐预览
   useEffect(() => {
@@ -73,22 +73,20 @@ export function useScreenWallpapers(
       const path = mon.currentWallpaper;
       if (!path) continue;
       if (byPath.has(normalize(path))) continue;
-      if (cacheRef.current.has(path) || inflightRef.current.has(path)) continue;
+      if (cacheRef.current.has(path)) continue;
 
-      inflightRef.current.add(path);
-      void api
-        .currentWallpaperPreview(path)
-        .then((dataUrl) => {
-          cacheRef.current.set(path, dataUrl);
-        })
-        .catch(() => {
-          // 文件已不存在或格式不支持：记 null，不要反复重试
-          cacheRef.current.set(path, null);
-        })
-        .finally(() => {
-          inflightRef.current.delete(path);
-          if (!cancelled) forceRender((n) => n + 1);
-        });
+      let request = inflightRef.current.get(path);
+      if (!request) {
+        request = api.currentWallpaperPreview(path)
+          .then((dataUrl) => { cacheRef.current.set(path, dataUrl); })
+          .catch(() => { cacheRef.current.set(path, null); })
+          .finally(() => { inflightRef.current.delete(path); });
+        inflightRef.current.set(path, request);
+      }
+      // 每次 effect 都订阅共享请求，StrictMode 重挂载或拓扑刷新后仍能收到结果。
+      void request.then(() => {
+        if (!cancelled) forceRender((n) => n + 1);
+      });
     }
 
     return () => {

@@ -16,9 +16,7 @@ pub struct AppState {
     pub library: Arc<Library>,
     pub data_dir: PathBuf,
 
-    /// 最近一次枚举的拓扑。缓存它有两个用途：
-    /// 1. 前端布局切换时无需重复走 COM
-    /// 2. 拓扑变化事件里可以对比新旧列表，判断是否需要重放绑定
+    /// 最近一次枚举的拓扑快照；投放前仍需重新枚举，避免使用过期设备路径。
     pub topology: RwLock<Option<Topology>>,
 }
 
@@ -30,10 +28,6 @@ impl AppState {
             data_dir,
             topology: RwLock::new(None),
         }
-    }
-
-    pub fn cached_topology(&self) -> Option<Topology> {
-        self.topology.read().clone()
     }
 
     pub fn store_topology(&self, t: Topology) {

@@ -60,6 +60,9 @@ pub struct MonitorBinding {
     pub wallpaper_id: Option<String>,
     /// fill / fit / stretch / center / tile
     pub position: String,
+    /// 跨屏分片的持久化路径；普通壁纸为 None，恢复时不能把原图当分片投放。
+    #[serde(default)]
+    pub rendered_path: Option<String>,
 }
 
 /// 导入结果汇总。导入是批量操作，需要逐条反馈成功与失败原因。

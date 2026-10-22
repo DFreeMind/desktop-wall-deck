@@ -20,7 +20,7 @@ fn 设置壁纸后回读一致并恢复原状() {
         eprintln!("跳过：样本图片不存在");
         return;
     }
-    let report = lib.import(&[src]).unwrap();
+    let report = lib.import(&[src], None).unwrap();
     assert_eq!(report.added, 1);
     let wp = test_api::list(&lib).unwrap().into_iter().next().unwrap();
 

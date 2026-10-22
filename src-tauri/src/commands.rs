@@ -31,7 +31,7 @@ pub fn list_monitors(state: State<'_, AppState>) -> Result<Topology, String> {
 
 /// 投放目标：全部屏幕，或指定的一组逻辑身份。
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type", content = "value")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type", content = "value")]
 pub enum Target {
     /// 所有物理显示器统一壁纸。
     ///
@@ -100,7 +100,7 @@ pub fn apply_wallpaper(state: State<'_, AppState>, req: ApplyRequest) -> Result<
                 return Err("没有可设置的物理显示器".into());
             }
 
-            if include_virtual {
+            if targets.len() == topology.monitors.len() {
                 // 语义为系统级统一壁纸：新插入的屏幕也会继承同一张图
                 state.worker.set_wallpaper(None, &path, position).map_err(err)?;
             } else {
@@ -119,6 +119,7 @@ pub fn apply_wallpaper(state: State<'_, AppState>, req: ApplyRequest) -> Result<
                     identity: m.identity.clone(),
                     wallpaper_id: Some(req.wallpaper_id.clone()),
                     position: req.position.clone(),
+                    rendered_path: None,
                 })
                 .collect();
             state.library.db().save_bindings(&bindings).map_err(err)?;
@@ -145,6 +146,7 @@ pub fn apply_wallpaper(state: State<'_, AppState>, req: ApplyRequest) -> Result<
                             identity: identity.clone(),
                             wallpaper_id: Some(req.wallpaper_id.clone()),
                             position: req.position.clone(),
+                            rendered_path: None,
                         });
                     }
                     None => skipped.push(format!("身份为 {identity} 的显示器已断开")),
@@ -157,11 +159,9 @@ pub fn apply_wallpaper(state: State<'_, AppState>, req: ApplyRequest) -> Result<
     }
 }
 
-/// 保证拓扑已加载。多数命令依赖显示器列表，缺失时现拉一次。
+/// 操作前刷新拓扑，避免热插拔后仍使用旧设备路径。
 fn ensure_topology(state: &AppState) -> Result<Topology, String> {
-    if let Some(t) = state.cached_topology() {
-        return Ok(t);
-    }
+    // 操作前读取实时设备路径，缓存可能已因热插拔或系统换壁纸而失效。
     let raw = state.worker.list_monitors().map_err(err)?;
     let topology = Topology::from_monitors(build_monitors(raw));
     state.store_topology(topology.clone());
@@ -174,8 +174,6 @@ fn ensure_topology(state: &AppState) -> Result<Topology, String> {
 #[serde(rename_all = "camelCase")]
 pub struct SpanRequest {
     pub wallpaper_id: String,
-    #[serde(default = "default_position")]
-    pub position: String,
 }
 
 #[tauri::command]
@@ -198,7 +196,8 @@ pub fn apply_span(state: State<'_, AppState>, req: SpanRequest) -> Result<ApplyR
     }
 
     // 统一到包围盒坐标系，再按每块屏的矩形切分
-    let b = &topology.bounds;
+    let physical_topology = Topology::from_monitors(physical.iter().map(|m| (*m).clone()).collect());
+    let b = &physical_topology.bounds;
     let rel: Vec<(String, (i32, i32, i32, i32))> = physical
         .iter()
         .map(|m| {
@@ -222,23 +221,28 @@ pub fn apply_span(state: State<'_, AppState>, req: SpanRequest) -> Result<ApplyR
         return Err("切图结果为空，请检查显示器布局".into());
     }
 
-    // 分片写到临时目录。使用库数据目录下的 span 子目录，便于统一清理。
-    let span_dir = state.data_dir.join("span");
-    let _ = std::fs::remove_dir_all(&span_dir);
+    // 按壁纸与布局隔离缓存，保留其它屏仍在使用的分片；重复操作复用路径。
+    let span_dir = image_ops::span_cache_dir(&state.data_dir, &req.wallpaper_id, &rel, b.width(), b.height());
     std::fs::create_dir_all(&span_dir)
         .map_err(|e| format!("创建临时目录失败：{e}"))?;
 
-    let position = parse_position(&req.position);
+    // 分片已经按屏幕坐标裁切，必须铺满，不能再居中或平铺。
+    let position = Position::Fill;
     let mut applied = 0;
     let mut bindings = Vec::new();
 
+    // 先写完所有分片，编码失败时保持当前桌面和绑定不变。
+    let mut pieces = Vec::new();
     for (idx, slice) in slices.iter().enumerate() {
         let piece_path = span_dir.join(format!("segment-{idx}.png"));
         slice
             .image
             .save_with_format(&piece_path, image::ImageFormat::Png)
             .map_err(|e| format!("写出分片失败：{e}"))?;
+        pieces.push((slice, piece_path));
+    }
 
+    for (idx, (slice, piece_path)) in pieces.iter().enumerate() {
         state
             .worker
             .set_wallpaper(
@@ -254,7 +258,8 @@ pub fn apply_span(state: State<'_, AppState>, req: SpanRequest) -> Result<ApplyR
             bindings.push(crate::library::MonitorBinding {
                 identity: m.identity.clone(),
                 wallpaper_id: Some(req.wallpaper_id.clone()),
-                position: req.position.clone(),
+                position: "fill".into(),
+                rendered_path: Some(piece_path.to_string_lossy().into_owned()),
             });
         }
     }
@@ -498,4 +503,21 @@ fn urlencode_path(path: &str) -> String {
 #[tauri::command]
 pub fn data_dir(state: State<'_, AppState>) -> String {
     state.data_dir.to_string_lossy().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 全屏投放请求兼容前端驼峰字段() {
+        for include_virtual in [false, true] {
+            let request: ApplyRequest = serde_json::from_value(serde_json::json!({
+                "wallpaperId": "wallpaper",
+                "target": { "type": "all", "value": { "includeVirtual": include_virtual } }
+            })).unwrap();
+            assert!(matches!(request.target, Target::All { include_virtual: value } if value == include_virtual));
+            assert_eq!(request.position, "fill");
+        }
+    }
 }

@@ -35,8 +35,8 @@ export const api = {
       req: { wallpaperId, target, position },
     }),
 
-  applySpan: (wallpaperId: string, position: Position) =>
-    call<ApplyResult>("apply_span", { req: { wallpaperId, position } }),
+  applySpan: (wallpaperId: string) =>
+    call<ApplyResult>("apply_span", { req: { wallpaperId } }),
 
   libraryList: () => call<Wallpaper[]>("library_list"),
 

@@ -16,7 +16,7 @@
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 
 use crate::library::MonitorBinding;
 use crate::wallpaper::identity::build_monitors;
@@ -40,9 +40,14 @@ pub fn spawn(worker: crate::wallpaper::WallpaperWorker, library: std::sync::Arc<
             if rx.recv().is_err() {
                 return;
             }
-            // 排空紧随其后的重复事件
-            while rx.try_recv().is_ok() {}
-            thread::sleep(SETTLE_DELAY);
+            // 从最后一个事件起等待稳定期，插拔过程中到来的新事件重新计时。
+            loop {
+                match rx.recv_timeout(SETTLE_DELAY) {
+                    Ok(()) => continue,
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
 
             if let Err(e) = restore(&worker, &library) {
                 eprintln!("[拓扑恢复] 失败：{e}");
@@ -83,9 +88,14 @@ pub fn apply_bindings(
         let Some(wallpaper_id) = &binding.wallpaper_id else {
             continue;
         };
-        let Some(path) = library.file_path_of(wallpaper_id).map_err(|e| e.to_string())? else {
+        let Some(original) = library.file_path_of(wallpaper_id).map_err(|e| e.to_string())? else {
             continue;
         };
+        let path = binding.rendered_path.as_deref().unwrap_or(&original);
+        if !std::path::Path::new(path).is_file() {
+            eprintln!("[拓扑恢复] 跳过「{}」：壁纸文件不存在", monitor.name);
+            continue;
+        }
         let position = match binding.position.as_str() {
             "center" => Position::Center,
             "tile" => Position::Tile,
@@ -94,7 +104,7 @@ pub fn apply_bindings(
             _ => Position::Fill,
         };
         worker
-            .set_wallpaper(Some(monitor.device_path.clone()), &path, position)
+            .set_wallpaper(Some(monitor.device_path.clone()), path, position)
             .map_err(|e| format!("恢复「{}」失败：{e}", monitor.name))?;
     }
     Ok(())

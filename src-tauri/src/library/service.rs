@@ -2,7 +2,7 @@
 //!
 //! 设计要点：
 //!
-//! 1. **入库即复制**。用户原始文件被复制进 app data 目录并转码为 PNG。
+//! 1. **入库即复制**。用户原始文件被复制进 app data，转 JPEG 或保留透明 PNG。
 //!    这样用户删掉下载目录里的原图，壁纸不会失效——这是壁纸管理工具
 //!    与「直接指向文件路径」的关键区别。
 //! 2. **按源路径去重**。重复导入同一文件只跳过，不产生副本，避免磁盘膨胀。
@@ -278,6 +278,13 @@ impl Library {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             return Err(LibError::Io("文件夹名称不能为空".into()));
+        }
+        let folder = self.db.get_folder(id)?
+            .ok_or_else(|| LibError::NotFound("文件夹不存在".into()))?;
+        if self.db.list_folders()?.iter().any(|f| {
+            f.id != id && f.parent_id == folder.parent_id && f.name.eq_ignore_ascii_case(trimmed)
+        }) {
+            return Err(LibError::Io(format!("同级已存在名为「{trimmed}」的文件夹")));
         }
         self.db.rename_folder(id, trimmed)
     }
@@ -559,6 +566,22 @@ mod tests {
         assert!(lib.create_folder("城市", Some(&other.id)).is_ok());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 重命名拒绝同级重名但允许自身与跨级同名() {
+        let root = temp_root("folder-rename");
+        let lib = Library::open(root.join("data")).unwrap();
+        let first = lib.create_folder("Nature", None).unwrap();
+        let second = lib.create_folder("City", None).unwrap();
+        assert!(lib.rename_folder(&second.id, " nature ").is_err());
+        assert!(lib.rename_folder(&first.id, " NATURE ").is_ok());
+        let child = lib.create_folder("Child", Some(&first.id)).unwrap();
+        assert!(lib.rename_folder(&child.id, "City").is_ok());
+        assert!(lib.rename_folder("missing", "Name").is_err());
+        assert_eq!(lib.db.get_folder(&second.id).unwrap().unwrap().name, "City");
+        drop(lib);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

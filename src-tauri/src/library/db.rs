@@ -113,6 +113,16 @@ impl Db {
                 .map_err(|e| LibError::Db(format!("添加 folder_id 列失败：{e}")))?;
         }
 
+        let has_rendered_path = {
+            let mut stmt = conn.prepare("PRAGMA table_info(monitor_bindings)")?;
+            let columns = stmt.query_map([], |r| r.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            columns.iter().any(|c| c == "rendered_path")
+        };
+        if !has_rendered_path {
+            conn.execute_batch("ALTER TABLE monitor_bindings ADD COLUMN rendered_path TEXT;")?;
+        }
+
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_wallpapers_folder ON wallpapers(folder_id);",
         )
@@ -404,13 +414,14 @@ impl Db {
         let now = chrono_now();
         for b in bindings {
             tx.execute(
-                "INSERT INTO monitor_bindings (identity, wallpaper_id, position, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO monitor_bindings (identity, wallpaper_id, position, updated_at, rendered_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(identity) DO UPDATE SET
                    wallpaper_id = excluded.wallpaper_id,
                    position     = excluded.position,
-                   updated_at   = excluded.updated_at",
-                params![b.identity, b.wallpaper_id, b.position, now],
+                   updated_at   = excluded.updated_at,
+                   rendered_path = excluded.rendered_path",
+                params![b.identity, b.wallpaper_id, b.position, now, b.rendered_path],
             )?;
         }
         tx.commit()?;
@@ -420,7 +431,7 @@ impl Db {
     pub fn load_bindings(&self) -> LibResult<Vec<MonitorBinding>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT identity, wallpaper_id, position FROM monitor_bindings",
+            "SELECT identity, wallpaper_id, position, rendered_path FROM monitor_bindings",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -428,6 +439,7 @@ impl Db {
                     identity: row.get(0)?,
                     wallpaper_id: row.get(1)?,
                     position: row.get(2)?,
+                    rendered_path: row.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -473,4 +485,36 @@ pub fn chrono_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 旧库迁移并保留跨屏绑定且普通投放清除分片路径() {
+        let dir = std::env::temp_dir().join(format!("dwd-binding-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE monitor_bindings (
+            identity TEXT PRIMARY KEY, wallpaper_id TEXT, position TEXT NOT NULL, updated_at INTEGER NOT NULL);
+            INSERT INTO monitor_bindings VALUES ('screen', 'wallpaper', 'fit', 0);").unwrap();
+        drop(conn);
+        let db = Db::open(&path).unwrap();
+        let mut bindings = db.load_bindings().unwrap();
+        assert_eq!(bindings[0].position, "fit");
+        assert!(bindings[0].rendered_path.is_none());
+        bindings[0].rendered_path = Some("C:\\data\\span\\piece.png".into());
+        db.save_bindings(&bindings).unwrap();
+        drop(db);
+        let db = Db::open(&path).unwrap();
+        let mut bindings = db.load_bindings().unwrap();
+        assert_eq!(bindings[0].rendered_path.as_deref(), Some("C:\\data\\span\\piece.png"));
+        bindings[0].rendered_path = None;
+        db.save_bindings(&bindings).unwrap();
+        assert!(db.load_bindings().unwrap()[0].rendered_path.is_none());
+        drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
