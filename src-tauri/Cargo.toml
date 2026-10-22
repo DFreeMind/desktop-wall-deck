@@ -1,0 +1,47 @@
+[package]
+name = "desktop-wall-deck"
+version = "0.1.0"
+description = "Windows 多显示器壁纸管理工具"
+authors = ["duqimeng"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "desktop_wall_deck_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+image = "0.25"
+kamadak-exif = "0.5"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+thiserror = "1"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    # WNDCLASSW / RegisterClassW 在 windows crate 中被 Gdi feature 门控，
+    # 仅用于创建隐藏消息窗口接收 WM_DISPLAYCHANGE，不涉及任何绘图。
+    "Win32_Graphics_Gdi",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
