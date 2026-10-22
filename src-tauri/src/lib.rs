@@ -7,6 +7,27 @@ mod state;
 mod topology_watch;
 mod wallpaper;
 
+/// 集成测试用入口。
+///
+/// 只暴露 `Library::open` 这一条路径，供 `tests/` 下的端到端测试验证
+/// 「真实图片 → 转码 → 入库 → 生成缩略图」的完整链路。
+/// 生产代码不走这里，模块本身仍保持私有，避免外部误用内部实现。
+#[doc(hidden)]
+pub mod test_api {
+    use std::path::PathBuf;
+
+    pub use crate::library::model::Wallpaper;
+    pub use crate::library::Library;
+
+    pub fn open_library(root: PathBuf) -> Result<Library, String> {
+        Library::open(root).map_err(|e| e.to_string())
+    }
+
+    pub fn list(lib: &Library) -> Result<Vec<Wallpaper>, String> {
+        lib.list().map_err(|e| e.to_string())
+    }
+}
+
 use tauri::Manager;
 
 use library::Library;

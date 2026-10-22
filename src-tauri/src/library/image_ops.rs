@@ -92,17 +92,59 @@ pub fn make_thumbnail(img: &DynamicImage) -> LibResult<Vec<u8>> {
     Ok(buf.into_inner())
 }
 
-/// 把图片规范化为 PNG 写入目标路径。
+/// 规范化后的存储格式。
 ///
-/// 返回写入后的像素尺寸，用于判断「这张图是否适合这块屏」。
-pub fn normalize_to_png(img: &DynamicImage, dest: &Path) -> LibResult<(u32, u32)> {
-    if let Some(parent) = dest.parent() {
+/// # 为什么不用 PNG
+///
+/// 初版把一切转成 PNG 以求「无损」，实测代价过高：一张 1.4MB 的 JPEG 壁纸
+/// 转 PNG 后变成 2.7MB，2520×2100 的图更是到 8.8MB。壁纸库动辄上百张，
+/// 磁盘会迅速吃满；而且屏幕上根本看不出差别。
+///
+/// 改为高质 JPEG（92）后，体积通常低于原图，视觉上无可察觉损失。
+/// 唯一例外是带透明通道的图——JPEG 不支持 alpha，转过去会变黑底，
+/// 这类图仍用 PNG。
+const JPEG_QUALITY: u8 = 92;
+
+/// 判断图片是否含透明像素。只有这种情况才值得保留 PNG。
+fn has_alpha_channel(img: &DynamicImage) -> bool {
+    img.color().has_alpha()
+}
+
+/// 把图片规范化为适合壁纸使用的文件，返回 `(写入路径, 宽, 高)`。
+///
+/// 扩展名由内容决定：带透明通道写 `.png`，其余写 `.jpg`。
+pub fn normalize_for_wallpaper(
+    img: &DynamicImage,
+    base_path: &Path,
+) -> LibResult<(PathBuf, u32, u32)> {
+    // 目录兜底，避免上层漏建
+    if let Some(parent) = base_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| LibError::Io(format!("创建目录失败 {}：{e}", parent.display())))?;
     }
-    img.save_with_format(dest, ImageFormat::Png)
-        .map_err(|e| LibError::Encode(format!("写入 {} 失败：{e}", dest.display())))?;
-    Ok((img.width(), img.height()))
+
+    let (dest, format) = if has_alpha_channel(img) {
+        (base_path.with_extension("png"), ImageFormat::Png)
+    } else {
+        (base_path.with_extension("jpg"), ImageFormat::Jpeg)
+    };
+
+    if format == ImageFormat::Jpeg {
+        // JPEG 不支持 alpha，若不转 RGB，编码会失败或写出异常色值
+        let rgb = img.to_rgb8();
+        let file = std::fs::File::create(&dest)
+            .map_err(|e| LibError::Io(format!("创建 {} 失败：{e}", dest.display())))?;
+        let writer = std::io::BufWriter::new(file);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, JPEG_QUALITY);
+        encoder
+            .encode_image(&rgb)
+            .map_err(|e| LibError::Encode(format!("JPEG 编码失败：{e}")))?;
+    } else {
+        img.save_with_format(&dest, format)
+            .map_err(|e| LibError::Encode(format!("写入 {} 失败：{e}", dest.display())))?;
+    }
+
+    Ok((dest, img.width(), img.height()))
 }
 
 /// 跨屏拼接的结果：某个屏幕对应的图片分片。
@@ -173,12 +215,12 @@ pub fn fit_advice(img_w: u32, img_h: u32, screen_w: i32, screen_h: i32) -> (bool
     }
 }
 
-/// 生成库内文件路径：`<库根>/<id 前两位>/<id>.png`。
+/// 库内文件**基**路径：`<库根>/files/<id 前两位>/<id>`，扩展名由内容决定后追加。
 ///
 /// 二级目录避免单目录文件过多导致的浏览卡顿。
-pub fn library_file_path(root: &Path, id: &str) -> PathBuf {
+pub fn library_file_base(root: &Path, id: &str) -> PathBuf {
     let prefix = &id[..2.min(id.len())];
-    root.join("files").join(prefix).join(format!("{id}.png"))
+    root.join("files").join(prefix).join(id)
 }
 
 /// 缩略图缓存路径。

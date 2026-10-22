@@ -33,8 +33,12 @@ pub fn list_monitors(state: State<'_, AppState>) -> Result<Topology, String> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", content = "value")]
 pub enum Target {
-    /// 所有显示器统一壁纸（含日后新插入的屏幕）
-    All,
+    /// 所有物理显示器统一壁纸。
+    ///
+    /// 显式传 `true` 时连虚拟屏一起设置；默认只作用于物理屏，
+    /// 因为虚拟屏（模拟器、串流）通常不是用户想统一的对象，
+    /// 且系统级 NULL 会连带覆盖它们的独立配置。
+    All { include_virtual: bool },
     /// 指定若干显示器，按逻辑身份匹配
     Identities(Vec<String>),
 }
@@ -84,13 +88,32 @@ pub fn apply_wallpaper(state: State<'_, AppState>, req: ApplyRequest) -> Result<
     let topology = ensure_topology(&state)?;
 
     match req.target {
-        Target::All => {
-            // NULL 语义：系统级统一壁纸，新插入的屏幕也会继承
-            state.worker.set_wallpaper(None, &path, position).map_err(err)?;
-
-            // 同时把绑定记到每块屏上，便于插拔后恢复
-            let bindings: Vec<_> = topology
+        Target::All { include_virtual } => {
+            let targets: Vec<crate::wallpaper::model::Monitor> = topology
                 .monitors
+                .iter()
+                .filter(|m| include_virtual || m.kind != crate::wallpaper::MonitorKind::Virtual)
+                .cloned()
+                .collect();
+
+            if targets.is_empty() {
+                return Err("没有可设置的物理显示器".into());
+            }
+
+            if include_virtual {
+                // 语义为系统级统一壁纸：新插入的屏幕也会继承同一张图
+                state.worker.set_wallpaper(None, &path, position).map_err(err)?;
+            } else {
+                // 逐屏投放，把虚拟屏排除在外，避免覆盖模拟器/串流的独立配置
+                for m in &targets {
+                    state
+                        .worker
+                        .set_wallpaper(Some(m.device_path.clone()), &path, position)
+                        .map_err(|e| format!("设置「{}」失败：{e}", m.name))?;
+                }
+            }
+
+            let bindings: Vec<_> = targets
                 .iter()
                 .map(|m| crate::library::MonitorBinding {
                     identity: m.identity.clone(),
@@ -100,7 +123,7 @@ pub fn apply_wallpaper(state: State<'_, AppState>, req: ApplyRequest) -> Result<
                 .collect();
             state.library.db().save_bindings(&bindings).map_err(err)?;
 
-            Ok(ApplyResult { applied: topology.monitors.len(), skipped: vec![] })
+            Ok(ApplyResult { applied: targets.len(), skipped: vec![] })
         }
         Target::Identities(ids) => {
             if ids.is_empty() {

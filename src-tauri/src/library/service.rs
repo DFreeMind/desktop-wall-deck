@@ -94,10 +94,11 @@ impl Library {
         let img = image_ops::load_oriented(&canonical)?;
 
         let id = uuid::Uuid::new_v4().simple().to_string();
-        let file_path = image_ops::library_file_path(&self.root, &id);
+        // 不带扩展名的基路径，实际扩展名由 normalize_for_wallpaper 依内容决定
+        let file_base = image_ops::library_file_base(&self.root, &id);
         let thumb_path = image_ops::thumb_file_path(&self.root, &id);
 
-        let (width, height) = image_ops::normalize_to_png(&img, &file_path)?;
+        let (file_path, width, height) = image_ops::normalize_for_wallpaper(&img, &file_base)?;
 
         if let Some(parent) = thumb_path.parent() {
             std::fs::create_dir_all(parent)
@@ -137,6 +138,14 @@ impl Library {
                 let path = Path::new(p);
                 if path.starts_with(&self.root) && path.exists() {
                     std::fs::remove_file(path).ok();
+                }
+            }
+            // 兜底清理同基名的另一格式（png/jpg 切换时可能留下孤儿文件）
+            let base = Path::new(&rec.file_path).with_extension("");
+            for ext in ["png", "jpg"] {
+                let alt = base.with_extension(ext);
+                if alt.starts_with(&self.root) && alt.exists() {
+                    std::fs::remove_file(alt).ok();
                 }
             }
         }

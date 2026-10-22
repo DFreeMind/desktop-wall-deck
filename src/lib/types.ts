@@ -55,7 +55,7 @@ export const POSITION_LABELS: Record<Position, string> = {
 };
 
 export type Target =
-  | { type: "all" }
+  | { type: "all"; value: { includeVirtual: boolean } }
   | { type: "identities"; value: string[] };
 
 export interface ApplyResult {

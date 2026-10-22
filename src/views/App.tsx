@@ -155,7 +155,7 @@ export default function App() {
   const applyAll = useCallback(() => {
     if (!activeId) return;
     void runApply(
-      () => api.applyWallpaper(activeId, { type: "all" }, position),
+      () => api.applyWallpaper(activeId, { type: "all", value: { includeVirtual: showVirtual } }, position),
       "已应用到所有屏幕",
     );
   }, [activeId, position, runApply]);
@@ -179,7 +179,7 @@ export default function App() {
       setActiveId(wpId);
       if (applyAllFlag) {
         void runApply(
-          () => api.applyWallpaper(wpId, { type: "all" }, position),
+          () => api.applyWallpaper(wpId, { type: "all", value: { includeVirtual: showVirtual } }, position),
           "已应用到所有屏幕",
         );
         return;
@@ -199,7 +199,12 @@ export default function App() {
       // 没有选屏时默认作用于全部，符合「点一下就换壁纸」的直觉
       if (selected.size === 0) {
         void runApply(
-          () => api.applyWallpaper(w.id, { type: "all" }, position),
+          () =>
+            api.applyWallpaper(
+              w.id,
+              { type: "all", value: { includeVirtual: showVirtual } },
+              position,
+            ),
           `已将「${w.name}」应用到所有屏幕`,
         );
       } else {
