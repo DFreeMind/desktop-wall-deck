@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::library::{image_ops, ImportReport, Wallpaper};
+use crate::library::{image_ops, Folder, FolderNode, ImportReport, Wallpaper};
 use crate::state::AppState;
 use crate::wallpaper::identity::build_monitors;
 use crate::wallpaper::{Position, Topology};
@@ -270,10 +270,34 @@ pub fn library_list(state: State<'_, AppState>) -> Result<Vec<Wallpaper>, String
     state.library.list().map_err(err)
 }
 
+/// 按文件夹筛选壁纸。
+///
+/// - `folderId` 为 `null` 时返回库根目录（未归入任何文件夹）的壁纸；
+/// - `recursive` 为真时穿透所有子文件夹，这正是「查看合集全部内容」需要的能力。
 #[tauri::command]
-pub fn library_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportReport, String> {
+pub fn library_list_in_folder(
+    state: State<'_, AppState>,
+    folder_id: Option<String>,
+    #[allow(non_snake_case)] recursive: bool,
+) -> Result<Vec<Wallpaper>, String> {
+    match folder_id {
+        Some(fid) => state.library.list_in_folder(&fid, recursive).map_err(err),
+        None => state.library.list_root_wallpapers().map_err(err),
+    }
+}
+
+#[tauri::command]
+pub fn library_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+    folder_id: Option<String>,
+) -> Result<ImportReport, String> {
     let pb: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    let report = state.library.import(&pb).map_err(err)?;
+    let report = state
+        .library
+        .import(&pb, folder_id.as_deref())
+        .map_err(err)?;
     // 导入完成后广播，让壁纸库视图自行刷新，无需前端轮询
     let _ = app.emit("library://changed", ());
     Ok(report)
@@ -299,6 +323,64 @@ pub fn library_usage(state: State<'_, AppState>) -> Result<(usize, u64), String>
     let list = state.library.list().map_err(err)?;
     let bytes = list.iter().map(|w| w.bytes).sum();
     Ok((list.len(), bytes))
+}
+
+// ---------------------------------------------------------------- 文件夹
+
+#[tauri::command]
+pub fn folder_create(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<Folder, String> {
+    let folder = state
+        .library
+        .create_folder(&name, parent_id.as_deref())
+        .map_err(err)?;
+    let _ = app.emit("library://changed", ());
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn folder_rename(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    state.library.rename_folder(&id, &name).map_err(err)?;
+    let _ = app.emit("library://changed", ());
+    Ok(())
+}
+
+/// 删除文件夹。内部壁纸与子文件夹上移一级，不会被连带删除。
+#[tauri::command]
+pub fn folder_delete(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.library.delete_folder(&id).map_err(err)?;
+    let _ = app.emit("library://changed", ());
+    Ok(())
+}
+
+/// 完整目录树（含每层直接数量与子树总数），一次拉取供前端渲染侧栏。
+#[tauri::command]
+pub fn folder_tree(state: State<'_, AppState>) -> Result<Vec<FolderNode>, String> {
+    state.library.folder_tree().map_err(err)
+}
+
+#[tauri::command]
+pub fn library_move_to_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    state
+        .library
+        .move_to_folder(&id, folder_id.as_deref())
+        .map_err(err)?;
+    let _ = app.emit("library://changed", ());
+    Ok(())
 }
 
 // ---------------------------------------------------------------- 辅助信息

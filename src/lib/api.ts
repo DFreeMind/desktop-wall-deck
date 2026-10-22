@@ -8,6 +8,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ApplyResult,
+  Folder,
+  FolderNode,
   ImportReport,
   Position,
   Target,
@@ -37,15 +39,32 @@ export const api = {
 
   libraryList: () => call<Wallpaper[]>("library_list"),
 
-  libraryImport: (paths: string[]) =>
-    call<ImportReport>("library_import", { paths }),
+  /** 按文件夹筛选；`folderId` 为 null 时返回未归类的壁纸。 */
+  libraryListInFolder: (folderId: string | null, recursive: boolean) =>
+    call<Wallpaper[]>("library_list_in_folder", { folderId, recursive }),
+
+  libraryImport: (paths: string[], folderId?: string | null) =>
+    call<ImportReport>("library_import", { paths, folderId: folderId ?? null }),
 
   libraryRemove: (id: string) => call<void>("library_remove", { id }),
 
   libraryRename: (id: string, name: string) =>
     call<void>("library_rename", { id, name }),
 
+  libraryMoveToFolder: (id: string, folderId: string | null) =>
+    call<void>("library_move_to_folder", { id, folderId }),
+
   libraryUsage: () => call<[number, number]>("library_usage"),
+
+  folderTree: () => call<FolderNode[]>("folder_tree"),
+
+  folderCreate: (name: string, parentId: string | null) =>
+    call<Folder>("folder_create", { name, parentId }),
+
+  folderRename: (id: string, name: string) =>
+    call<void>("folder_rename", { id, name }),
+
+  folderDelete: (id: string) => call<void>("folder_delete", { id }),
 
   fitAdvice: (wallpaperId: string, identity: string) =>
     call<[boolean, string]>("fit_advice", { wallpaperId, identity }),
@@ -60,6 +79,10 @@ export const api = {
  * 中文与空格必须转义，否则图片加载失败且不报错（只显示空白）。
  */
 export function assetUrl(absolutePath: string): string {
+  // 已经是可直接使用的 URL（data: / blob: / http:）时原样返回。
+  // 真实运行时 thumbPath 一定是本地路径，但界面预览与将来的远程库
+  // 可能直接给出 URL，不加这层判断会把 `data:` 拼成非法路径。
+  if (/^(data:|blob:|https?:)/i.test(absolutePath)) return absolutePath;
   return `http://asset.localhost/${encodeFsPath(absolutePath)}`;
 }
 

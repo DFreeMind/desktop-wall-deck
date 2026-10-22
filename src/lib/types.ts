@@ -42,6 +42,29 @@ export interface Wallpaper {
   height: number;
   bytes: number;
   createdAt: number;
+  /** 所属文件夹；null 表示位于库根目录 */
+  folderId: string | null;
+}
+
+/** 壁纸文件夹，`parentId` 自引用构成目录树。 */
+export interface Folder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  createdAt: number;
+}
+
+/**
+ * 带统计的目录节点。
+ *
+ * `directCount` 是本层直接存放的张数，`totalCount` 含所有后代。
+ * 列表上显示总数（用户关心「这个合集里一共多少张」），
+ * 空判断用 `directCount`（避免「有子合集但本层为空」被误判为空）。
+ */
+export interface FolderNode extends Folder {
+  directCount: number;
+  totalCount: number;
+  children: string[];
 }
 
 export type Position = "fill" | "fit" | "stretch" | "center" | "tile";
@@ -91,4 +114,22 @@ export function monitorSize(m: Monitor): { w: number; h: number } {
 export function isPortrait(m: Monitor): boolean {
   const { w, h } = monitorSize(m);
   return h > w;
+}
+
+/**
+ * 当前浏览范围。
+ *
+ * 之所以不用「folderId + recursive 布尔值」两个独立状态，是因为
+ * 「全部壁纸」「未归类」「某个合集（含子集）」是互斥的三种视图，
+ * 用联合类型表达可以避免出现「folderId 为空但 recursive 为真」这类无意义组合。
+ */
+export type LibraryScope =
+  | { kind: "all" }
+  | { kind: "unfiled" }
+  | { kind: "folder"; id: string; recursive: boolean };
+
+export function scopeKey(s: LibraryScope): string {
+  if (s.kind === "all") return "all";
+  if (s.kind === "unfiled") return "unfiled";
+  return `folder:${s.id}:${s.recursive ? "deep" : "flat"}`;
 }

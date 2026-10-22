@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use super::db::{chrono_now, Db, WallpaperRecord};
 use super::error::{LibError, LibResult};
 use super::image_ops;
-use super::model::{ImportFailure, ImportReport, Wallpaper};
+use super::model::{Folder, FolderNode, ImportFailure, ImportReport, Wallpaper};
 
 pub struct Library {
     root: PathBuf,
@@ -44,11 +44,22 @@ impl Library {
     }
 
     /// 批量导入文件或目录（目录会递归扫描）。
-    pub fn import(&self, paths: &[PathBuf]) -> LibResult<ImportReport> {
+    ///
+    /// `folder_id` 指定入库后归属的文件夹；`None` 表示放在库根目录。
+    /// 导入到某个文件夹时，其子文件夹也会被递归扫描，但所有图片都归到该文件夹下，
+    /// 不做「按源目录自动建子目录」——那会让用户的目录结构被意外复制进库。
+    pub fn import(&self, paths: &[PathBuf], folder_id: Option<&str>) -> LibResult<ImportReport> {
         let mut report = ImportReport::default();
 
+        // 目标文件夹必须存在，否则会写入悬挂引用
+        if let Some(fid) = folder_id {
+            if self.db.get_folder(fid)?.is_none() {
+                return Err(LibError::Io("目标文件夹不存在".into()));
+            }
+        }
+
         for path in self.expand(paths) {
-            match self.import_one(&path) {
+            match self.import_one(&path, folder_id) {
                 Ok(true) => report.added += 1,
                 Ok(false) => report.skipped += 1,
                 Err(e) => report.failed.push(ImportFailure {
@@ -74,7 +85,7 @@ impl Library {
     }
 
     /// 导入单个文件。返回 `Ok(false)` 表示已存在而跳过。
-    fn import_one(&self, source: &Path) -> LibResult<bool> {
+    fn import_one(&self, source: &Path, folder_id: Option<&str>) -> LibResult<bool> {
         if !source.is_file() {
             return Err(LibError::NotFound(source.display().to_string()));
         }
@@ -125,6 +136,7 @@ impl Library {
             height,
             bytes,
             created_at: chrono_now(),
+            folder_id: folder_id.map(|s| s.to_string()),
         })?;
 
         Ok(true)
@@ -151,6 +163,88 @@ impl Library {
         }
         self.db.delete(id)?;
         Ok(())
+    }
+
+    // ---------------- 文件夹 ----------------
+
+    pub fn create_folder(&self, name: &str, parent_id: Option<&str>) -> LibResult<Folder> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(LibError::Io("文件夹名称不能为空".into()));
+        }
+        // 同级重名直接拒绝：目录树上两个同名节点无法区分，是纯粹的困惑来源
+        let siblings = self.db.list_folders()?;
+        if siblings
+            .iter()
+            .any(|f| f.parent_id.as_deref() == parent_id && f.name.eq_ignore_ascii_case(trimmed))
+        {
+            return Err(LibError::Io(format!("同级已存在名为「{trimmed}」的文件夹")));
+        }
+
+        if let Some(pid) = parent_id {
+            if self.db.get_folder(pid)?.is_none() {
+                return Err(LibError::Io("父文件夹不存在".into()));
+            }
+        }
+
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        self.db.create_folder(&id, trimmed, parent_id)?;
+        self.db
+            .get_folder(&id)?
+            .ok_or_else(|| LibError::Db("创建文件夹后读取失败".into()))
+    }
+
+    pub fn rename_folder(&self, id: &str, name: &str) -> LibResult<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(LibError::Io("文件夹名称不能为空".into()));
+        }
+        self.db.rename_folder(id, trimmed)
+    }
+
+    /// 删除文件夹。内部壁纸上移到父级，不随之删除。
+    pub fn delete_folder(&self, id: &str) -> LibResult<()> {
+        self.db.delete_folder(id)
+    }
+
+    pub fn folder_tree(&self) -> LibResult<Vec<FolderNode>> {
+        self.db.folder_tree()
+    }
+
+    /// 按文件夹筛选。`recursive` 为真时包含所有子文件夹。
+    pub fn list_in_folder(&self, folder_id: &str, recursive: bool) -> LibResult<Vec<Wallpaper>> {
+        let ids = if recursive {
+            self.db.collect_subtree_ids(folder_id)?
+        } else {
+            vec![folder_id.to_string()]
+        };
+        Ok(self
+            .db
+            .list_by_folders(&ids)?
+            .into_iter()
+            .map(Wallpaper::from)
+            .collect())
+    }
+
+    /// 未归入任何文件夹的壁纸。
+    pub fn list_root_wallpapers(&self) -> LibResult<Vec<Wallpaper>> {
+        Ok(self
+            .db
+            .list()?
+            .into_iter()
+            .filter(|r| r.folder_id.is_none())
+            .map(Wallpaper::from)
+            .collect())
+    }
+
+    /// 把壁纸移动到文件夹（`None` 为根目录）。
+    pub fn move_to_folder(&self, id: &str, folder_id: Option<&str>) -> LibResult<()> {
+        if let Some(fid) = folder_id {
+            if self.db.get_folder(fid)?.is_none() {
+                return Err(LibError::Io("目标文件夹不存在".into()));
+            }
+        }
+        self.db.move_to_folder(id, folder_id)
     }
 
     pub fn rename(&self, id: &str, name: &str) -> LibResult<()> {
@@ -209,7 +303,7 @@ mod tests {
         let src = write_png(&src_dir, "a.png");
 
         let lib = Library::open(root.join("data")).unwrap();
-        let report = lib.import(&[src.clone()]).unwrap();
+        let report = lib.import(&[src.clone()], None).unwrap();
         assert_eq!(report.added, 1);
 
         let list = lib.list().unwrap();
@@ -229,8 +323,8 @@ mod tests {
         let src = write_png(&root, "b.png");
         let lib = Library::open(root.join("data")).unwrap();
 
-        assert_eq!(lib.import(&[src.clone()]).unwrap().added, 1);
-        let second = lib.import(&[src]).unwrap();
+        assert_eq!(lib.import(&[src.clone()], None).unwrap().added, 1);
+        let second = lib.import(&[src], None).unwrap();
         assert_eq!(second.added, 0);
         assert_eq!(second.skipped, 1);
         assert_eq!(lib.list().unwrap().len(), 1);
@@ -243,7 +337,7 @@ mod tests {
         let root = temp_root("remove");
         let src = write_png(&root, "c.png");
         let lib = Library::open(root.join("data")).unwrap();
-        lib.import(&[src.clone()]).unwrap();
+        lib.import(&[src.clone()], None).unwrap();
 
         let wp = lib.list().unwrap().into_iter().next().unwrap();
         lib.remove(&wp.id).unwrap();
@@ -251,6 +345,129 @@ mod tests {
         assert!(lib.list().unwrap().is_empty());
         assert!(!Path::new(&wp.file_path).exists(), "库内副本应被删除");
         assert!(src.exists(), "用户原始文件必须保留");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ---------------- 文件夹 ----------------
+
+    #[test]
+    fn 文件夹可嵌套且穿透统计总数() {
+        let root = temp_root("folder-tree");
+        let src = write_png(&root, "d.png");
+        let lib = Library::open(root.join("data")).unwrap();
+
+        let top = lib.create_folder("风景", None).unwrap();
+        let child = lib.create_folder("雪山", Some(&top.id)).unwrap();
+        let grand = lib.create_folder("冬季", Some(&child.id)).unwrap();
+
+        lib.import(&[src.clone()], Some(&grand.id)).unwrap();
+
+        let tree = lib.folder_tree().unwrap();
+        let by_id = |id: &str| tree.iter().find(|n| n.folder.id == id).unwrap();
+
+        // 图片在最深层，三个层级的总数都应包含它；直接数量只有叶子为 1
+        assert_eq!(by_id(&grand.id).total_count, 1);
+        assert_eq!(by_id(&child.id).total_count, 1);
+        assert_eq!(by_id(&top.id).total_count, 1);
+        assert_eq!(by_id(&top.id).direct_count, 0);
+        assert_eq!(by_id(&top.id).children, vec![child.id.clone()]);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 穿透查询包含子文件夹非穿透则不含() {
+        let root = temp_root("folder-recursive");
+        let a = write_png(&root, "e.png");
+        let b = write_png(&root, "f.png");
+        let lib = Library::open(root.join("data")).unwrap();
+
+        let parent = lib.create_folder("父", None).unwrap();
+        let sub = lib.create_folder("子", Some(&parent.id)).unwrap();
+
+        lib.import(&[a], Some(&parent.id)).unwrap();
+        lib.import(&[b], Some(&sub.id)).unwrap();
+
+        // 非穿透只看本层
+        assert_eq!(lib.list_in_folder(&parent.id, false).unwrap().len(), 1);
+        // 穿透则含子树
+        assert_eq!(lib.list_in_folder(&parent.id, true).unwrap().len(), 2);
+        assert_eq!(lib.list_in_folder(&sub.id, true).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 删除文件夹时壁纸上移而非连带删除() {
+        let root = temp_root("folder-del");
+        let src = write_png(&root, "g.png");
+        let lib = Library::open(root.join("data")).unwrap();
+
+        let parent = lib.create_folder("父", None).unwrap();
+        let sub = lib.create_folder("子", Some(&parent.id)).unwrap();
+        lib.import(&[src], Some(&sub.id)).unwrap();
+
+        lib.delete_folder(&sub.id).unwrap();
+
+        // 壁纸还在，且被移到父文件夹
+        let list = lib.list_in_folder(&parent.id, false).unwrap();
+        assert_eq!(list.len(), 1, "壁纸应上移到父文件夹");
+        assert_eq!(list[0].folder_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(lib.list().unwrap().len(), 1, "壁纸不能被删除");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 同级重名文件夹被拒绝() {
+        let root = temp_root("folder-dup");
+        let lib = Library::open(root.join("data")).unwrap();
+
+        lib.create_folder("城市", None).unwrap();
+        assert!(lib.create_folder("城市", None).is_err());
+
+        // 不同层级允许同名：目录树里路径不同，不会混淆
+        let other = lib.create_folder("自然", None).unwrap();
+        assert!(lib.create_folder("城市", Some(&other.id)).is_ok());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 根目录查询只返回未归类壁纸() {
+        let root = temp_root("folder-root");
+        let a = write_png(&root, "h.png");
+        let b = write_png(&root, "i.png");
+        let lib = Library::open(root.join("data")).unwrap();
+        let folder = lib.create_folder("已归类", None).unwrap();
+
+        lib.import(&[a], None).unwrap();
+        lib.import(&[b], Some(&folder.id)).unwrap();
+
+        let root_list = lib.list_root_wallpapers().unwrap();
+        assert_eq!(root_list.len(), 1);
+        assert!(root_list[0].folder_id.is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 移动壁纸到文件夹与移回根目录() {
+        let root = temp_root("folder-move");
+        let src = write_png(&root, "j.png");
+        let lib = Library::open(root.join("data")).unwrap();
+        let folder = lib.create_folder("目标", None).unwrap();
+
+        lib.import(&[src], None).unwrap();
+        let wp = lib.list().unwrap().into_iter().next().unwrap();
+        assert!(wp.folder_id.is_none());
+
+        lib.move_to_folder(&wp.id, Some(&folder.id)).unwrap();
+        assert_eq!(lib.list_in_folder(&folder.id, false).unwrap().len(), 1);
+
+        lib.move_to_folder(&wp.id, None).unwrap();
+        assert!(lib.list_root_wallpapers().unwrap().len() == 1);
 
         std::fs::remove_dir_all(&root).ok();
     }

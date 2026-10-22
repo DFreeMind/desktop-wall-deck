@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::error::{LibError, LibResult};
-use super::model::{MonitorBinding, Wallpaper};
+use super::model::{Folder, FolderNode, MonitorBinding, Wallpaper};
 
 /// 库内壁纸条目（含数据库内部字段）。
 #[derive(Debug, Clone)]
@@ -23,6 +23,7 @@ pub struct WallpaperRecord {
     pub height: u32,
     pub bytes: u64,
     pub created_at: i64,
+    pub folder_id: Option<String>,
 }
 
 pub struct Db {
@@ -80,9 +81,43 @@ impl Db {
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            -- 壁纸文件夹：单层父子自引用，支持任意深度
+            CREATE TABLE IF NOT EXISTS folders (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                parent_id  TEXT REFERENCES folders(id) ON DELETE CASCADE,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
             "#,
         )
         .map_err(|e| LibError::Db(format!("初始化表结构失败：{e}")))?;
+
+        // 增量迁移：老库没有 folder_id 列，用 PRAGMA 判断后再加。
+        // 不能直接写进上面的 CREATE TABLE，因为对已存在的表 CREATE 会被忽略。
+        let has_folder_col: bool = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(wallpapers)")
+                .map_err(|e| LibError::Db(e.to_string()))?;
+            let cols = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| LibError::Db(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| LibError::Db(e.to_string()))?;
+            cols.iter().any(|c| c == "folder_id")
+        };
+
+        if !has_folder_col {
+            conn.execute_batch("ALTER TABLE wallpapers ADD COLUMN folder_id TEXT;")
+                .map_err(|e| LibError::Db(format!("添加 folder_id 列失败：{e}")))?;
+        }
+
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_wallpapers_folder ON wallpapers(folder_id);",
+        )
+        .map_err(|e| LibError::Db(e.to_string()))?;
+
         Ok(())
     }
 
@@ -90,7 +125,7 @@ impl Db {
     pub fn find_by_source(&self, source_path: &str) -> LibResult<Option<WallpaperRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
              FROM wallpapers WHERE source_path = ?1 LIMIT 1",
         )?;
         let rec = stmt
@@ -103,8 +138,8 @@ impl Db {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO wallpapers
-             (id, file_path, thumb_path, source_path, name, width, height, bytes, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 rec.id,
                 rec.file_path,
@@ -114,7 +149,8 @@ impl Db {
                 rec.width,
                 rec.height,
                 rec.bytes,
-                rec.created_at
+                rec.created_at,
+                rec.folder_id
             ],
         )?;
         Ok(())
@@ -123,7 +159,7 @@ impl Db {
     pub fn list(&self) -> LibResult<Vec<WallpaperRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
              FROM wallpapers ORDER BY created_at DESC",
         )?;
         let rows = stmt
@@ -135,7 +171,7 @@ impl Db {
     pub fn get(&self, id: &str) -> LibResult<Option<WallpaperRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
              FROM wallpapers WHERE id = ?1",
         )?;
         Ok(stmt.query_row(params![id], map_record).optional()?)
@@ -160,6 +196,204 @@ impl Db {
             params![id, name],
         )?;
         Ok(())
+    }
+
+    /// 把壁纸移动到指定文件夹，`None` 表示移到库根目录。
+    pub fn move_to_folder(&self, id: &str, folder_id: Option<&str>) -> LibResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE wallpapers SET folder_id = ?2 WHERE id = ?1",
+            params![id, folder_id],
+        )?;
+        Ok(())
+    }
+
+    // ---------------- 文件夹 ----------------
+
+    pub fn create_folder(&self, id: &str, name: &str, parent_id: Option<&str>) -> LibResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO folders (id, name, parent_id, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, parent_id, chrono_now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn rename_folder(&self, id: &str, name: &str) -> LibResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("UPDATE folders SET name = ?2 WHERE id = ?1", params![id, name])?;
+        Ok(())
+    }
+
+    pub fn get_folder(&self, id: &str) -> LibResult<Option<Folder>> {
+        let conn = self.conn.lock();
+        let mut stmt =
+            conn.prepare("SELECT id, name, parent_id, created_at FROM folders WHERE id = ?1")?;
+        Ok(stmt
+            .query_row(params![id], |r| {
+                Ok(Folder {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    parent_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })
+            .optional()?)
+    }
+
+    pub fn list_folders(&self) -> LibResult<Vec<Folder>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT id, name, parent_id, created_at FROM folders ORDER BY name COLLATE NOCASE")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Folder {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    parent_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 删除文件夹。
+    ///
+    /// 内部壁纸不删，而是上移到父文件夹，避免用户误删目录时连带丢掉图片。
+    /// 子文件夹同理上移一级，保持层级连续而不是被整个删掉。
+    pub fn delete_folder(&self, id: &str) -> LibResult<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+
+        let parent: Option<String> = tx
+            .query_row(
+                "SELECT parent_id FROM folders WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+
+        tx.execute(
+            "UPDATE wallpapers SET folder_id = ?2 WHERE folder_id = ?1",
+            params![id, parent],
+        )?;
+        tx.execute(
+            "UPDATE folders SET parent_id = ?2 WHERE parent_id = ?1",
+            params![id, parent],
+        )?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 以 `root` 为起点，返回它自己及所有后代文件夹的 id（广度优先）。
+    ///
+    /// 深度上限 32，防止脏数据里出现环导致死循环。
+    pub fn collect_subtree_ids(&self, root: &str) -> LibResult<Vec<String>> {
+        let all = self.list_folders()?;
+        let mut result = vec![root.to_string()];
+        let mut frontier = vec![root.to_string()];
+
+        for _ in 0..32 {
+            if frontier.is_empty() {
+                break;
+            }
+            let mut next = Vec::new();
+            for f in &all {
+                if let Some(pid) = &f.parent_id {
+                    if frontier.iter().any(|x| x == pid) && !result.contains(&f.id) {
+                        result.push(f.id.clone());
+                        next.push(f.id.clone());
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Ok(result)
+    }
+
+    /// 统计每个文件夹的直接壁纸数与子树总数，供目录树展示。
+    pub fn folder_tree(&self) -> LibResult<Vec<FolderNode>> {
+        let folders = self.list_folders()?;
+        let counts = self.folder_direct_counts()?;
+
+        let mut nodes: Vec<FolderNode> = folders
+            .iter()
+            .map(|f| FolderNode {
+                folder: f.clone(),
+                direct_count: counts
+                    .iter()
+                    .find(|(id, _)| id == &f.id)
+                    .map(|(_, c)| *c)
+                    .unwrap_or(0),
+                total_count: 0,
+                children: folders
+                    .iter()
+                    .filter(|c| c.parent_id.as_deref() == Some(f.id.as_str()))
+                    .map(|c| c.id.clone())
+                    .collect(),
+            })
+            .collect();
+
+        // 自底向上累加：先算叶子，再算父级。
+        // 循环次数取文件夹数量即可保证收敛（最坏情况是一条链）。
+        for _ in 0..folders.len().max(1) {
+            let snapshot: Vec<(String, usize)> =
+                nodes.iter().map(|n| (n.folder.id.clone(), n.total_count)).collect();
+            let mut changed = false;
+            for n in nodes.iter_mut() {
+                let subtree_total = n.direct_count
+                    + snapshot
+                        .iter()
+                        .filter(|(cid, _)| n.children.contains(cid))
+                        .map(|(_, c)| *c)
+                        .sum::<usize>();
+                if n.total_count != subtree_total {
+                    n.total_count = subtree_total;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        Ok(nodes)
+    }
+
+    /// 各文件夹内的直接壁纸数量。
+    fn folder_direct_counts(&self) -> LibResult<Vec<(String, usize)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT folder_id, COUNT(*) FROM wallpapers WHERE folder_id IS NOT NULL GROUP BY folder_id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 按文件夹集合筛选壁纸；传空集合表示不过滤（返回全部）。
+    pub fn list_by_folders(&self, folder_ids: &[String]) -> LibResult<Vec<WallpaperRecord>> {
+        if folder_ids.is_empty() {
+            return self.list();
+        }
+        let conn = self.conn.lock();
+        // 动态占位符：数量随选中文件夹变化，无法用固定 SQL
+        let placeholders = vec!["?"; folder_ids.len()].join(",");
+        let sql = format!(
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
+             FROM wallpapers WHERE folder_id IN ({placeholders}) ORDER BY created_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params_iter = rusqlite::params_from_iter(folder_ids.iter());
+        let rows = stmt
+            .query_map(params_iter, map_record)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     // ---- 显示器绑定 ----
@@ -213,6 +447,7 @@ fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<WallpaperRecord> {
         height: row.get::<_, i64>(6)? as u32,
         bytes: row.get::<_, i64>(7)? as u64,
         created_at: row.get(8)?,
+        folder_id: row.get(9)?,
     })
 }
 
@@ -227,6 +462,7 @@ impl From<WallpaperRecord> for Wallpaper {
             height: r.height,
             bytes: r.bytes,
             created_at: r.created_at,
+            folder_id: r.folder_id,
         }
     }
 }
