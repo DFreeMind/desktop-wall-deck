@@ -1,23 +1,51 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
-import type { Monitor, Position, Topology, Wallpaper } from "../lib/types";
+import type {
+  FolderNode,
+  LibraryScope,
+  Monitor,
+  Position,
+  Topology,
+  Wallpaper,
+} from "../lib/types";
 import { TopologyCanvas } from "../components/TopologyCanvas";
 import { WallpaperGrid } from "../components/WallpaperGrid";
 import { MonitorPanel } from "../components/MonitorPanel";
+import { SideNav, type NavView } from "../components/SideNav";
+import { ConfirmDialog, MoveDialog, PromptDialog } from "../components/dialogs";
 import { Toast, type ToastItem } from "../components/Toast";
+import { SourcesView } from "./SourcesView";
+import { SettingsView } from "./SettingsView";
+import { CollectionsView } from "./CollectionsView";
+import { IconRefresh } from "../components/icons";
 
 /**
- * 主视图：三栏布局。
+ * 主视图：左侧导航 + 中间内容区 + 右侧属性面板。
  *
  * 数据流是单向的：本组件持有所有状态，子组件只上报意图。
  * 壁纸操作全部经后端写系统，前端不回写「哪块屏用了哪张图」，
  * 而是在每次成功后重新拉取拓扑（后端会带回真实壁纸路径），
  * 避免前端状态与系统真实状态分叉——壁纸可能被系统设置或其他工具改动。
+ *
+ * 弹窗（新建合集 / 重命名 / 移动 / 删除确认）统一由 `dialog` 状态驱动，
+ * 不用嵌套组件各自持有：一次只能有一个弹窗，用状态机比多个布尔量更不容易出错。
  */
+
+type Dialog =
+  | { kind: "none" }
+  | { kind: "new-folder"; parentId: string | null }
+  | { kind: "rename-folder"; id: string; name: string }
+  | { kind: "move"; wallpaper: Wallpaper }
+  | { kind: "delete-folder"; id: string; name: string; total: number }
+  | { kind: "delete-wallpaper"; wallpaper: Wallpaper };
+
 export default function App() {
   const [topology, setTopology] = useState<Topology | null>(null);
   const [wallpapers, setWallpapers] = useState<Wallpaper[]>([]);
+  const [folders, setFolders] = useState<FolderNode[]>([]);
+  const [view, setView] = useState<NavView>("display");
+  const [scope, setScope] = useState<LibraryScope>({ kind: "all" });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [position, setPosition] = useState<Position>("fill");
@@ -27,6 +55,7 @@ export default function App() {
   const [fitMessage, setFitMessage] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [showVirtual, setShowVirtual] = useState(false);
+  const [dialog, setDialog] = useState<Dialog>({ kind: "none" });
 
   const notify = useCallback((text: string, kind: ToastItem["kind"] = "info") => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -37,16 +66,18 @@ export default function App() {
 
   const refreshTopology = useCallback(async () => {
     try {
-      const t = await api.listMonitors();
-      setTopology(t);
+      setTopology(await api.listMonitors());
     } catch (e) {
       notify((e as Error).message, "error");
     }
   }, [notify]);
 
-  const refreshLibrary = useCallback(async () => {
+  /** 全量刷新：壁纸、合集树、当前范围的内容一次拉齐，保证三者一致。 */
+  const refreshAll = useCallback(async () => {
     try {
-      setWallpapers(await api.libraryList());
+      const [list, tree] = await Promise.all([api.libraryList(), api.folderTree()]);
+      setWallpapers(list);
+      setFolders(tree);
     } catch (e) {
       notify((e as Error).message, "error");
     }
@@ -54,18 +85,18 @@ export default function App() {
 
   useEffect(() => {
     void refreshTopology();
-    void refreshLibrary();
-  }, [refreshTopology, refreshLibrary]);
+    void refreshAll();
+  }, [refreshTopology, refreshAll]);
 
-  // 后端导入完成会广播，这里跟随刷新
+  // 后端写操作后广播，这里跟随刷新
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen("library://changed", () => void refreshLibrary());
+      unlisten = await listen("library://changed", () => void refreshAll());
     })();
     return () => unlisten?.();
-  }, [refreshLibrary]);
+  }, [refreshAll]);
 
   /** 可见显示器：虚拟屏默认折叠，避免模拟器/串流设备污染画布。 */
   const monitors = useMemo<Monitor[]>(() => {
@@ -75,7 +106,7 @@ export default function App() {
       : topology.monitors.filter((m) => m.kind !== "virtual");
   }, [topology, showVirtual]);
 
-  const hiddenVirtualCount = useMemo(
+  const virtualCount = useMemo(
     () => (topology ? topology.monitors.filter((m) => m.kind === "virtual").length : 0),
     [topology],
   );
@@ -84,8 +115,8 @@ export default function App() {
   const wallpaperMap = useMemo(() => {
     const byPath = new Map(wallpapers.map((w) => [normalize(w.filePath), w]));
     const map = new Map<string, Wallpaper>();
-    // 注意：系统当前壁纸可能不来自本库（用户曾手动设置），
-    // 这种情况找不到对应记录，画布显示占位色，属预期行为。
+    // 系统当前壁纸可能不来自本库（用户曾手动设置），
+    // 这种情况找不到对应记录，画布显示空屏占位，属预期行为。
     for (const m of monitors) {
       if (m.currentWallpaper) {
         const hit = byPath.get(normalize(m.currentWallpaper));
@@ -94,6 +125,25 @@ export default function App() {
     }
     return map;
   }, [monitors, wallpapers]);
+
+  const folderById = useMemo(() => {
+    const map = new Map<string, FolderNode>();
+    for (const f of folders) map.set(f.id, f);
+    return map;
+  }, [folders]);
+
+  /** 当前范围下的壁纸。合集范围在前端过滤，避免每次切换都打一次后端。 */
+  const scopedWallpapers = useMemo(() => {
+    if (scope.kind === "all") return wallpapers;
+    if (scope.kind === "unfiled") return wallpapers.filter((w) => !w.folderId);
+    const ids = scope.recursive ? collectSubtree(folders, scope.id) : new Set([scope.id]);
+    return wallpapers.filter((w) => w.folderId && ids.has(w.folderId));
+  }, [scope, wallpapers, folders]);
+
+  const unfiledCount = useMemo(
+    () => wallpapers.filter((w) => !w.folderId).length,
+    [wallpapers],
+  );
 
   const activeWallpaper = useMemo(
     () => wallpapers.find((w) => w.id === activeId) ?? null,
@@ -155,10 +205,15 @@ export default function App() {
   const applyAll = useCallback(() => {
     if (!activeId) return;
     void runApply(
-      () => api.applyWallpaper(activeId, { type: "all", value: { includeVirtual: showVirtual } }, position),
+      () =>
+        api.applyWallpaper(
+          activeId,
+          { type: "all", value: { includeVirtual: showVirtual } },
+          position,
+        ),
       "已应用到所有屏幕",
     );
-  }, [activeId, position, runApply]);
+  }, [activeId, position, runApply, showVirtual]);
 
   const applySelected = useCallback(() => {
     if (!activeId || selected.size === 0) return;
@@ -177,26 +232,31 @@ export default function App() {
   const handleDropWallpaper = useCallback(
     (wpId: string, identities: string[], applyAllFlag: boolean) => {
       setActiveId(wpId);
+      const wp = wallpapers.find((w) => w.id === wpId);
       if (applyAllFlag) {
         void runApply(
-          () => api.applyWallpaper(wpId, { type: "all", value: { includeVirtual: showVirtual } }, position),
+          () =>
+            api.applyWallpaper(
+              wpId,
+              { type: "all", value: { includeVirtual: showVirtual } },
+              position,
+            ),
           "已应用到所有屏幕",
         );
         return;
       }
       void runApply(
         () => api.applyWallpaper(wpId, { type: "identities", value: identities }, position),
-        `已应用到 ${identities.length} 块屏幕`,
+        wp ? `已将「${wp.name}」应用到 ${identities.length} 块屏` : "已应用",
       );
     },
-    [position, runApply],
+    [position, runApply, showVirtual, wallpapers],
   );
 
   /** 点击壁纸：先选中，再按当前选择范围应用。 */
   const handleApplyWallpaper = useCallback(
     (w: Wallpaper) => {
       setActiveId(w.id);
-      // 没有选屏时默认作用于全部，符合「点一下就换壁纸」的直觉
       if (selected.size === 0) {
         void runApply(
           () =>
@@ -210,19 +270,19 @@ export default function App() {
       } else {
         void runApply(
           () =>
-            api.applyWallpaper(
-              w.id,
-              { type: "identities", value: Array.from(selected) },
-              position,
-            ),
+            api.applyWallpaper(w.id, { type: "identities", value: Array.from(selected) }, position),
           `已将「${w.name}」应用到 ${selected.size} 块屏幕`,
         );
       }
     },
-    [position, runApply, selected],
+    [position, runApply, selected, showVirtual],
   );
 
+  /** 导入：会把图片归入当前浏览的合集。根目录范围导入到根。 */
   const handleImport = useCallback(async () => {
+    const targetFolder =
+      scope.kind === "folder" ? scope.id : null;
+
     try {
       const picked = await open({
         multiple: true,
@@ -240,41 +300,123 @@ export default function App() {
       if (paths.length === 0) return;
 
       setImporting(true);
-      const report = await api.libraryImport(paths);
-      await refreshLibrary();
+      const report = await api.libraryImport(paths, targetFolder);
+      await refreshAll();
 
       const parts = [`新增 ${report.added} 张`];
       if (report.skipped > 0) parts.push(`跳过 ${report.skipped} 张（已存在）`);
       if (report.failed.length > 0) parts.push(`失败 ${report.failed.length} 张`);
 
-      notify(
-        parts.join("，"),
-        report.failed.length > 0 ? "warn" : "success",
-      );
+      notify(parts.join("，"), report.failed.length > 0 ? "warn" : "success");
       if (report.failed.length > 0) {
         // 只展示首条失败原因，避免刷屏
-        notify(`${report.failed[0].reason}`, "error");
+        notify(report.failed[0].reason, "error");
       }
     } catch (e) {
       notify((e as Error).message, "error");
     } finally {
       setImporting(false);
     }
-  }, [notify, refreshLibrary]);
+  }, [notify, refreshAll, scope]);
 
-  const handleDelete = useCallback(
-    async (w: Wallpaper) => {
+  // ---------------- 合集操作 ----------------
+
+  const submitNewFolder = useCallback(
+    async (name: string, parentId: string | null) => {
+      setDialog({ kind: "none" });
       try {
-        await api.libraryRemove(w.id);
-        if (activeId === w.id) setActiveId(null);
-        await refreshLibrary();
-        notify(`已从库中移除「${w.name}」`, "info");
+        const created = await api.folderCreate(name, parentId);
+        await refreshAll();
+        // 建完直接切到新合集，符合「建了就是要往里放东西」的预期
+        setScope({ kind: "folder", id: created.id, recursive: true });
+        setView("library");
+        notify(`已新建合集「${name}」`, "success");
       } catch (e) {
         notify((e as Error).message, "error");
       }
     },
-    [activeId, notify, refreshLibrary],
+    [notify, refreshAll],
   );
+
+  const submitRenameFolder = useCallback(
+    async (id: string, name: string) => {
+      setDialog({ kind: "none" });
+      try {
+        await api.folderRename(id, name);
+        await refreshAll();
+      } catch (e) {
+        notify((e as Error).message, "error");
+      }
+    },
+    [notify, refreshAll],
+  );
+
+  const submitDeleteFolder = useCallback(
+    async (id: string) => {
+      setDialog({ kind: "none" });
+      try {
+        await api.folderDelete(id);
+        await refreshAll();
+        // 删掉的正是当前浏览的合集时，退回全部，避免出现空视图
+        if (scope.kind === "folder" && scope.id === id) setScope({ kind: "all" });
+        notify("合集已删除，其中的壁纸已移到上一级", "info");
+      } catch (e) {
+        notify((e as Error).message, "error");
+      }
+    },
+    [notify, refreshAll, scope],
+  );
+
+  const submitMove = useCallback(
+    async (wp: Wallpaper, folderId: string | null) => {
+      setDialog({ kind: "none" });
+      try {
+        await api.libraryMoveToFolder(wp.id, folderId);
+        await refreshAll();
+        const name = folderId ? folderById.get(folderId)?.name ?? "合集" : "库根目录";
+        notify(`「${wp.name}」已移动到${name}`, "success");
+      } catch (e) {
+        notify((e as Error).message, "error");
+      }
+    },
+    [folderById, notify, refreshAll],
+  );
+
+  const submitDeleteWallpaper = useCallback(
+    async (wp: Wallpaper) => {
+      setDialog({ kind: "none" });
+      try {
+        await api.libraryRemove(wp.id);
+        if (activeId === wp.id) setActiveId(null);
+        await refreshAll();
+        notify(`已从库中移除「${wp.name}」`, "info");
+      } catch (e) {
+        notify((e as Error).message, "error");
+      }
+    },
+    [activeId, notify, refreshAll],
+  );
+
+  // ---------------- 范围描述文案 ----------------
+
+  const scopeTitle = useMemo(() => {
+    if (scope.kind === "all") return "壁纸库";
+    if (scope.kind === "unfiled") return "未归类";
+    return folderById.get(scope.id)?.name ?? "合集";
+  }, [scope, folderById]);
+
+  const scopeHint = useMemo(() => {
+    if (scope.kind === "all") return "全部壁纸，含所有合集内的图片";
+    if (scope.kind === "unfiled") return "还没有归入任何合集的壁纸";
+    const node = folderById.get(scope.id);
+    if (!node) return "";
+    const sub = node.children.length;
+    return sub > 0
+      ? `含 ${sub} 个子合集，共 ${node.totalCount} 张（本层 ${node.directCount} 张）`
+      : `共 ${node.totalCount} 张`;
+  }, [scope, folderById]);
+
+  const importLabel = scope.kind === "folder" ? "导入到此合集" : "导入图片";
 
   return (
     <div className="app">
@@ -284,63 +426,139 @@ export default function App() {
           桌面壁纸
         </div>
         <div className="topbar-actions">
-          {hiddenVirtualCount > 0 && (
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={showVirtual}
-                onChange={(e) => setShowVirtual(e.target.checked)}
-              />
-              显示 {hiddenVirtualCount} 块虚拟屏
-            </label>
-          )}
-          <button className="ghost" onClick={() => void refreshTopology()}>
+          <button
+            className="icon-text-btn"
+            onClick={() => void refreshTopology()}
+            title="重新读取显示器信息"
+          >
+            <IconRefresh size={14} />
             刷新显示器
           </button>
         </div>
       </header>
 
-      <main className="body">
-        <section className="stage">
-          <div className="stage-head">
-            <h1>显示器布局</h1>
-            <span className="dim">
-              按系统实际排列绘制 · 拖拽壁纸到屏幕上可直接设置
-            </span>
-          </div>
-          <TopologyCanvas
-            topology={topology ? { ...topology, monitors } : null}
-            wallpaperMap={wallpaperMap}
-            selected={selected}
-            onToggleSelect={toggleSelect}
-            onDropWallpaper={handleDropWallpaper}
-            draggingId={draggingId}
-          />
-          {selected.size > 0 && (
-            <div className="selection-bar">
-              已选 {selected.size} 块屏
-              <button className="ghost" onClick={() => setSelected(new Set())}>
-                清除选择
-              </button>
+      <div className="shell">
+        <SideNav
+          view={view}
+          onViewChange={setView}
+          scope={scope}
+          onScopeChange={setScope}
+          folders={folders}
+          totalCount={wallpapers.length}
+          unfiledCount={unfiledCount}
+          monitorCount={monitors.length}
+          onCreateFolder={(parentId) => setDialog({ kind: "new-folder", parentId })}
+        />
+
+        <main className="content">
+          {view === "display" && (
+            <div className="display-page">
+              <div className="canvas-wrap">
+                <div className="canvas-head">
+                  <div className="canvas-head-main">
+                    <h1>显示器布局</h1>
+                    <span className="canvas-head-sub">
+                      按系统实际排列绘制 · 拖拽壁纸到屏幕上可直接设置
+                    </span>
+                  </div>
+                  {selected.size > 0 && (
+                    <div className="selection-chip">
+                      已选 {selected.size} 块屏
+                      <button className="link-btn" onClick={() => setSelected(new Set())}>
+                        清除
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <TopologyCanvas
+                  topology={topology ? { ...topology, monitors } : null}
+                  wallpaperMap={wallpaperMap}
+                  selected={selected}
+                  onToggleSelect={toggleSelect}
+                  onDropWallpaper={handleDropWallpaper}
+                  draggingId={draggingId}
+                  onPickFor={(identity) => {
+                    setSelected(new Set([identity]));
+                    setView("library");
+                  }}
+                />
+              </div>
+
+              <WallpaperGrid
+                wallpapers={scopedWallpapers}
+                activeIds={activeIds}
+                onDragStart={setDraggingId}
+                onDragEnd={() => setDraggingId(null)}
+                onApply={handleApplyWallpaper}
+                onDelete={(w) => setDialog({ kind: "delete-wallpaper", wallpaper: w })}
+                onMove={(w) => setDialog({ kind: "move", wallpaper: w })}
+                onImport={() => void handleImport()}
+                importing={importing}
+                scopeTitle={scopeTitle}
+                scopeHint={scopeHint}
+                importLabel={importLabel}
+              />
             </div>
           )}
 
-          <WallpaperGrid
-            wallpapers={wallpapers}
-            activeIds={activeIds}
-            onDragStart={setDraggingId}
-            onDragEnd={() => setDraggingId(null)}
-            onApply={handleApplyWallpaper}
-            onDelete={handleDelete}
-            onImport={() => void handleImport()}
-            importing={importing}
-          />
-        </section>
+          {view === "library" && (
+            <div className="library-page">
+              <WallpaperGrid
+                wallpapers={scopedWallpapers}
+                activeIds={activeIds}
+                onDragStart={setDraggingId}
+                onDragEnd={() => setDraggingId(null)}
+                onApply={handleApplyWallpaper}
+                onDelete={(w) => setDialog({ kind: "delete-wallpaper", wallpaper: w })}
+                onMove={(w) => setDialog({ kind: "move", wallpaper: w })}
+                onImport={() => void handleImport()}
+                importing={importing}
+                scopeTitle={scopeTitle}
+                scopeHint={scopeHint}
+                importLabel={importLabel}
+              />
+            </div>
+          )}
+
+          {view === "collections" && (
+            <CollectionsView
+              folders={folders}
+              onOpen={(id) => {
+                setScope({ kind: "folder", id, recursive: true });
+                setView("library");
+              }}
+              onCreate={(parentId) => setDialog({ kind: "new-folder", parentId })}
+              onRename={(f) => setDialog({ kind: "rename-folder", id: f.id, name: f.name })}
+              onDelete={(f) =>
+                setDialog({
+                  kind: "delete-folder",
+                  id: f.id,
+                  name: f.name,
+                  total: f.totalCount,
+                })
+              }
+            />
+          )}
+
+          {view === "sources" && (
+            <SourcesView onError={(msg) => notify(msg, "error")} />
+          )}
+
+          {view === "settings" && (
+            <SettingsView
+              totalCount={wallpapers.length}
+              monitorCount={monitors.length}
+              virtualCount={virtualCount}
+              showVirtual={showVirtual}
+              onShowVirtualChange={setShowVirtual}
+              onNotify={notify}
+            />
+          )}
+        </main>
 
         <MonitorPanel
           monitors={monitors}
           selected={selected}
-          wallpapers={wallpapers}
           activeWallpaper={activeWallpaper}
           position={position}
           onPositionChange={setPosition}
@@ -349,8 +567,70 @@ export default function App() {
           onApplySelected={applySelected}
           onApplySpan={applySpan}
           busy={busy}
+          wallpaperMap={wallpaperMap}
+          onClearSelection={() => setSelected(new Set())}
+          onToggleSelect={toggleSelect}
         />
-      </main>
+      </div>
+
+      {/* ---------------- 弹窗 ---------------- */}
+
+      {dialog.kind === "new-folder" && (
+        <PromptDialog
+          title={dialog.parentId ? "新建子合集" : "新建合集"}
+          placeholder="合集名称，如「工作」「风景」"
+          confirmText="创建"
+          onCancel={() => setDialog({ kind: "none" })}
+          onSubmit={(name) => void submitNewFolder(name, dialog.parentId)}
+        />
+      )}
+
+      {dialog.kind === "rename-folder" && (
+        <PromptDialog
+          title="重命名合集"
+          defaultValue={dialog.name}
+          confirmText="保存"
+          onCancel={() => setDialog({ kind: "none" })}
+          onSubmit={(name) => void submitRenameFolder(dialog.id, name)}
+        />
+      )}
+
+      {dialog.kind === "delete-folder" && (
+        <ConfirmDialog
+          title={`删除合集「${dialog.name}」？`}
+          body={
+            dialog.total > 0
+              ? `合集内的 ${dialog.total} 张壁纸不会被删除，会移动到上一级；子合集同样上移一级。`
+              : "这是一个空合集，删除后不影响任何壁纸。"
+          }
+          confirmText="删除合集"
+          danger
+          onCancel={() => setDialog({ kind: "none" })}
+          onConfirm={() => void submitDeleteFolder(dialog.id)}
+        />
+      )}
+
+      {dialog.kind === "move" && (
+        <MoveDialog
+          wallpaperName={dialog.wallpaper.name}
+          folders={folders}
+          currentFolderId={dialog.wallpaper.folderId}
+          onCancel={() => setDialog({ kind: "none" })}
+          onPick={(folderId) => void submitMove(dialog.wallpaper, folderId)}
+          onCreateFolder={(parentId) => setDialog({ kind: "new-folder", parentId })}
+        />
+      )}
+
+      {dialog.kind === "delete-wallpaper" && (
+        <ConfirmDialog
+          title={`从库中移除「${dialog.wallpaper.name}」？`}
+          body="只会删除应用内的副本，你电脑上的原始图片不受影响。"
+          confirmText="移除"
+          danger
+          onCancel={() => setDialog({ kind: "none" })}
+          onConfirm={() => void submitDeleteWallpaper(dialog.wallpaper)}
+        />
+      )}
 
       <Toast items={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
@@ -360,4 +640,28 @@ export default function App() {
 /** 路径规范化，用于跨大小写与分隔符比较（Windows 路径大小写不敏感）。 */
 function normalize(p: string): string {
   return p.replace(/\//g, "\\").toLowerCase();
+}
+
+/** 收集某个合集自身及所有后代的 id，用于前端穿透过滤。 */
+function collectSubtree(folders: FolderNode[], rootId: string): Set<string> {
+  const byParent = new Map<string, string[]>();
+  for (const f of folders) {
+    if (!f.parentId) continue;
+    const arr = byParent.get(f.parentId) ?? [];
+    arr.push(f.id);
+    byParent.set(f.parentId, arr);
+  }
+  const out = new Set<string>([rootId]);
+  const stack = [rootId];
+  // 深度上限防止脏数据成环
+  for (let guard = 0; stack.length > 0 && guard < 64; guard++) {
+    const cur = stack.pop() as string;
+    for (const child of byParent.get(cur) ?? []) {
+      if (!out.has(child)) {
+        out.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return out;
 }

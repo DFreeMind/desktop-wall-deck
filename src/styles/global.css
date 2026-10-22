@@ -21,9 +21,11 @@
   --accent-soft: #e8f0fe;
   --accent-border: #b9d0fb;
   --danger: #d64545;
+  --danger-soft: #fdeceb;
   --warning: #b0791b;
   --warning-soft: #fdf5e4;
   --success: #2e8b57;
+  --success-soft: #eaf6ef;
 
   --r-sm: 6px;
   --r-md: 9px;
