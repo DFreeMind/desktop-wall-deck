@@ -48,7 +48,22 @@ npm run tauri dev
 npm run tauri build
 ```
 
-产物位于 `src-tauri/target/release/bundle/nsis/`。
+产物：
+
+- 可执行文件 `src-tauri/target/release/desktop-wall-deck.exe`（约 9.5MB，可直接运行）
+- 安装包 `src-tauri/target/release/bundle/nsis/桌面壁纸_0.1.0_x64-setup.exe`（约 2.7MB）
+
+首次打包需要联网下载 NSIS 工具链，若网络不稳定会报 TLS 或 `peer closed connection`。
+可重试，或先用 `npx tauri build --no-bundle` 只产出 exe。
+
+## 测试
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 单元测试，无副作用
+cargo test --manifest-path src-tauri/Cargo.toml          # 含端到端测试
+```
+
+注意 `tests/e2e_apply.rs` 会**真实修改桌面壁纸**（结束时自动恢复），在他人机器上运行前请留意。
 
 ## 数据位置
 
