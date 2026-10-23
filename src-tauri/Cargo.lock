@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-wall-deck"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "crossbeam-channel",
  "dirs 5.0.1",

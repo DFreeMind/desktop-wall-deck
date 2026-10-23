@@ -34,6 +34,10 @@
 
 ## 开始使用
 
+### 下载 1.0.0
+
+从 [GitHub Release](https://github.com/DFreeMind/desktop-wall-deck/releases/latest) 下载 Windows x64 安装包（`*-setup.exe`）或直接运行版（`*_x64.exe`）。直接运行版需要系统已有 WebView2 Runtime，索引和缓存仍保存在应用数据目录。发布页同时提供 `SHA256SUMS.txt` 校验文件与[版本说明](docs/releases/1.0.0.md)。
+
 ### 1. 添加图片
 
 打开默认的“壁纸库”，点击右上角 **添加壁纸** 选择本机图片。旁边的下拉菜单可以选择 **添加文件夹**：登记一个来源目录，先查看扫描结果，确认后建立索引。
@@ -255,6 +259,12 @@ src-tauri/src/
 壁纸 COM 接口统一在单一 STA actor 线程中串行执行；“应用到全部”使用系统全屏语义，跨屏拼接则本地切片后逐屏设置。系统壁纸可能位于无扩展名或不在资源白名单内的路径，因此预览走后端解码，不扩大原图目录访问范围。
 
 开发约束、命令注册、显示器身份、缓存清理与布局稳定性规范见 [AGENTS.md](AGENTS.md)。应用图标的矢量源文件位于 [src/assets/app-icon.svg](src/assets/app-icon.svg)。
+
+### GitHub CI 与版本发布
+
+[Windows 构建与发布工作流](.github/workflows/windows-release.yml) 在推送 `main` 或向 `main` 发起 PR 时执行前端构建和 Rust 单元测试。推送 `v*` tag 时，还会校验 tag 与各处版本一致，构建 Windows x64 NSIS 安装包和直接运行版，生成 SHA-256 校验和，再自动创建 GitHub Release。
+
+发布前同步更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json` 中的应用版本，并在 `docs/releases/<版本>.md` 编写说明；然后为通过验证的主分支提交创建对应的 `v<版本>` tag。CI 不运行会实际修改桌面壁纸的端到端投放测试。
 
 ## 常见问题
 
