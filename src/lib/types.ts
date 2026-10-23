@@ -44,6 +44,29 @@ export interface Wallpaper {
   createdAt: number;
   /** 所属文件夹；null 表示位于库根目录 */
   folderId: string | null;
+  storageKind: "indexed" | "managed";
+  missing: boolean;
+  cachedPath: string | null;
+}
+
+export interface WallpaperDetails {
+  id: string;
+  name: string;
+  fileName: string;
+  filePath: string;
+  parentPath: string;
+  extension: string;
+  width: number;
+  height: number;
+  bytes: number;
+  /** 入库时间，Unix 秒。 */
+  indexedAt: number;
+  /** 原文件系统创建时间，Unix 秒；文件缺失或系统不支持时为 null。 */
+  fileCreatedAt: number | null;
+  /** 原文件系统修改时间，Unix 秒；文件缺失时为 null。 */
+  fileModifiedAt: number | null;
+  exists: boolean;
+  storageKind: "indexed" | "managed";
 }
 
 /** 壁纸文件夹，`parentId` 自引用构成目录树。 */
@@ -86,8 +109,32 @@ export interface ApplyResult {
   skipped: string[];
 }
 
+export interface OnlineWallpaper {
+  id: string;
+  source: string;
+  title: string;
+  thumbnailUrl: string;
+  pageUrl: string;
+  width: number;
+  height: number;
+  author: string;
+  license: string;
+}
+
+export interface OnlineSearchResult {
+  items: OnlineWallpaper[];
+  page: number;
+  hasMore: boolean;
+}
+
+export interface OnlineImportResult {
+  wallpaper: Wallpaper;
+  added: boolean;
+}
+
 export interface ImportReport {
   added: number;
+  updated: number;
   skipped: number;
   failed: { path: string; reason: string }[];
 }

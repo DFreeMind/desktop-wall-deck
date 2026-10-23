@@ -24,6 +24,9 @@ pub struct WallpaperRecord {
     pub bytes: u64,
     pub created_at: i64,
     pub folder_id: Option<String>,
+    pub storage_kind: String,
+    pub source_stamp: String,
+    pub cached_path: Option<String>,
 }
 
 pub struct Db {
@@ -82,6 +85,11 @@ impl Db {
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS online_origins (
+                wallpaper_id TEXT PRIMARY KEY,
+                metadata TEXT NOT NULL
+            );
+
             -- 壁纸文件夹：单层父子自引用，支持任意深度
             CREATE TABLE IF NOT EXISTS folders (
                 id         TEXT PRIMARY KEY,
@@ -123,6 +131,16 @@ impl Db {
             conn.execute_batch("ALTER TABLE monitor_bindings ADD COLUMN rendered_path TEXT;")?;
         }
 
+        let columns: Vec<String> = conn.prepare("PRAGMA table_info(wallpapers)")?
+            .query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
+        for (name, definition) in [("storage_kind", "TEXT NOT NULL DEFAULT 'managed'"), ("source_stamp", "TEXT NOT NULL DEFAULT ''"), ("cached_path", "TEXT")] {
+            if !columns.iter().any(|c| c == name) {
+                conn.execute_batch(&format!("ALTER TABLE wallpapers ADD COLUMN {name} {definition}"))?;
+            }
+        }
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS source_folders (
+            id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, folder_id TEXT);")?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS excluded_sources (path TEXT PRIMARY KEY);")?;
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_wallpapers_folder ON wallpapers(folder_id);",
         )
@@ -135,11 +153,11 @@ impl Db {
     pub fn find_by_source(&self, source_path: &str) -> LibResult<Option<WallpaperRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
-             FROM wallpapers WHERE source_path = ?1 LIMIT 1",
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id, storage_kind, source_stamp, cached_path
+             FROM wallpapers WHERE source_path = ?1 OR (?2 != '' AND source_path = ?2 COLLATE NOCASE) LIMIT 1",
         )?;
         let rec = stmt
-            .query_row(params![source_path], map_record)
+            .query_row(params![source_path, if source_path.starts_with("http") { String::new() } else { format!(r"\\?\{source_path}") }], map_record)
             .optional()?;
         Ok(rec)
     }
@@ -148,8 +166,8 @@ impl Db {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO wallpapers
-             (id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id, storage_kind, source_stamp, cached_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 rec.id,
                 rec.file_path,
@@ -160,7 +178,10 @@ impl Db {
                 rec.height,
                 rec.bytes,
                 rec.created_at,
-                rec.folder_id
+                rec.folder_id,
+                rec.storage_kind,
+                rec.source_stamp,
+                rec.cached_path
             ],
         )?;
         Ok(())
@@ -169,7 +190,7 @@ impl Db {
     pub fn list(&self) -> LibResult<Vec<WallpaperRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id, storage_kind, source_stamp, cached_path
              FROM wallpapers ORDER BY created_at DESC",
         )?;
         let rows = stmt
@@ -181,7 +202,7 @@ impl Db {
     pub fn get(&self, id: &str) -> LibResult<Option<WallpaperRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id, storage_kind, source_stamp, cached_path
              FROM wallpapers WHERE id = ?1",
         )?;
         Ok(stmt.query_row(params![id], map_record).optional()?)
@@ -190,11 +211,85 @@ impl Db {
     pub fn delete(&self, id: &str) -> LibResult<()> {
         let conn = self.conn.lock();
         conn.execute("DELETE FROM wallpapers WHERE id = ?1", params![id])?;
+        conn.execute("DELETE FROM online_origins WHERE wallpaper_id = ?1", params![id])?;
         // 级联清理绑定，避免指向已删除的壁纸
         conn.execute(
             "UPDATE monitor_bindings SET wallpaper_id = NULL WHERE wallpaper_id = ?1",
             params![id],
         )?;
+        Ok(())
+    }
+
+    pub fn update_index(&self, rec: &WallpaperRecord) -> LibResult<()> {
+        self.conn.lock().execute("UPDATE wallpapers SET file_path=?2, source_path=?3, width=?4, height=?5,
+            bytes=?6, source_stamp=?7, cached_path=NULL WHERE id=?1 AND storage_kind='indexed'",
+            params![rec.id, rec.file_path, rec.source_path, rec.width, rec.height, rec.bytes, rec.source_stamp])?;
+        Ok(())
+    }
+
+    pub fn cache_path(&self, id: &str, path: &str) -> LibResult<()> {
+        self.conn.lock().execute("UPDATE wallpapers SET cached_path=?2 WHERE id=?1", params![id, path])?;
+        Ok(())
+    }
+
+    pub fn relocate_indexed(&self, id: &str, path: &str, records: &[WallpaperRecord]) -> LibResult<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        let old_path: String = tx.query_row("SELECT path FROM source_folders WHERE id=?1", params![id], |r| r.get(0))?;
+        if old_path != path {
+            let excluded: Vec<String> = tx.prepare("SELECT path FROM excluded_sources")?
+                .query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+            for old in excluded {
+                if let Ok(relative) = Path::new(&old).strip_prefix(&old_path) {
+                    let replacement = Path::new(path).join(relative).to_string_lossy().to_string();
+                    tx.execute("INSERT OR IGNORE INTO excluded_sources(path) VALUES (?1)", params![replacement])?;
+                    tx.execute("DELETE FROM excluded_sources WHERE path=?1", params![old])?;
+                }
+            }
+        }
+        for rec in records {
+            tx.execute("UPDATE wallpapers SET file_path=?2,source_path=?3,width=?4,height=?5,bytes=?6,
+                source_stamp=?7,cached_path=NULL WHERE id=?1 AND storage_kind='indexed'",
+                params![rec.id,rec.file_path,rec.source_path,rec.width,rec.height,rec.bytes,rec.source_stamp])?;
+        }
+        tx.execute("UPDATE source_folders SET path=?2 WHERE id=?1", params![id,path])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn source_folders(&self) -> LibResult<Vec<super::model::SourceFolder>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT id, path, folder_id FROM source_folders ORDER BY path")?;
+        let result = stmt.query_map([], |row| {
+            let path: String = row.get(1)?;
+            Ok(super::model::SourceFolder { id: row.get(0)?, available: Path::new(&path).is_dir(), path, folder_id: row.get(2)? })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(result)
+    }
+
+    pub fn save_source(&self, source: &super::model::SourceFolder) -> LibResult<()> {
+        self.conn.lock().execute("INSERT INTO source_folders(id,path,folder_id) VALUES (?1,?2,?3)
+            ON CONFLICT(path) DO UPDATE SET folder_id=excluded.folder_id", params![source.id, source.path, source.folder_id])?;
+        Ok(())
+    }
+
+    pub fn remove_source(&self, id: &str) -> LibResult<()> {
+        self.conn.lock().execute("DELETE FROM source_folders WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn excluded(&self, path: &str) -> LibResult<bool> {
+        Ok(self.conn.lock().query_row("SELECT 1 FROM excluded_sources WHERE path=?1", params![path], |_| Ok(()))
+            .optional()?.is_some())
+    }
+
+    pub fn exclude(&self, path: &str) -> LibResult<()> {
+        self.conn.lock().execute("INSERT OR IGNORE INTO excluded_sources(path) VALUES (?1)", params![path])?;
+        Ok(())
+    }
+
+    pub fn unexclude(&self, path: &str) -> LibResult<()> {
+        self.conn.lock().execute("DELETE FROM excluded_sources WHERE path=?1", params![path])?;
         Ok(())
     }
 
@@ -289,6 +384,7 @@ impl Db {
             "UPDATE wallpapers SET folder_id = ?2 WHERE folder_id = ?1",
             params![id, parent],
         )?;
+        tx.execute("UPDATE source_folders SET folder_id=?2 WHERE folder_id=?1", params![id,parent])?;
         tx.execute(
             "UPDATE folders SET parent_id = ?2 WHERE parent_id = ?1",
             params![id, parent],
@@ -395,7 +491,7 @@ impl Db {
         // 动态占位符：数量随选中文件夹变化，无法用固定 SQL
         let placeholders = vec!["?"; folder_ids.len()].join(",");
         let sql = format!(
-            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id
+            "SELECT id, file_path, thumb_path, source_path, name, width, height, bytes, created_at, folder_id, storage_kind, source_stamp, cached_path
              FROM wallpapers WHERE folder_id IN ({placeholders}) ORDER BY created_at DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -407,6 +503,16 @@ impl Db {
     }
 
     // ---- 显示器绑定 ----
+
+    /// 保存原图页面、作者与许可，入库后仍能追溯在线来源。
+    pub fn save_online_origin(&self, wallpaper_id: &str, metadata: &str) -> LibResult<()> {
+        self.conn.lock().execute(
+            "INSERT INTO online_origins (wallpaper_id, metadata) VALUES (?1, ?2)
+             ON CONFLICT(wallpaper_id) DO UPDATE SET metadata = excluded.metadata",
+            params![wallpaper_id, metadata],
+        )?;
+        Ok(())
+    }
 
     pub fn save_bindings(&self, bindings: &[MonitorBinding]) -> LibResult<()> {
         let mut conn = self.conn.lock();
@@ -460,12 +566,19 @@ fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<WallpaperRecord> {
         bytes: row.get::<_, i64>(7)? as u64,
         created_at: row.get(8)?,
         folder_id: row.get(9)?,
+        storage_kind: row.get(10)?,
+        source_stamp: row.get(11)?,
+        cached_path: row.get(12)?,
     })
 }
 
 impl From<WallpaperRecord> for Wallpaper {
     fn from(r: WallpaperRecord) -> Self {
+        let missing = !Path::new(&r.file_path).is_file();
         Wallpaper {
+            storage_kind: r.storage_kind,
+            cached_path: r.cached_path,
+            missing,
             id: r.id,
             name: r.name,
             file_path: r.file_path,
@@ -515,6 +628,60 @@ mod tests {
         db.save_bindings(&bindings).unwrap();
         assert!(db.load_bindings().unwrap()[0].rendered_path.is_none());
         drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn 旧版十列壁纸表迁移默认托管并保留记录与绑定且可重复打开() {
+        let dir = std::env::temp_dir().join(format!("dwd-wallpaper-migration-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE folders (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                parent_id TEXT REFERENCES folders(id) ON DELETE CASCADE,
+                created_at INTEGER NOT NULL);
+             INSERT INTO folders VALUES ('collection-old', '旧合集', NULL, 123);
+             CREATE TABLE wallpapers (
+                id TEXT PRIMARY KEY,
+                file_path TEXT NOT NULL UNIQUE,
+                thumb_path TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                name TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                bytes INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                folder_id TEXT);
+             INSERT INTO wallpapers VALUES (
+                'wallpaper-old', 'C:\\wallpapers\\old.jpg', 'C:\\app\\thumbs\\old.jpg',
+                'https://wallhaven.cc/w/old', '旧版保留名称', 1920, 1080, 345678, 456,
+                'collection-old');
+             CREATE TABLE monitor_bindings (
+                identity TEXT PRIMARY KEY, wallpaper_id TEXT,
+                position TEXT NOT NULL, updated_at INTEGER NOT NULL);
+             INSERT INTO monitor_bindings VALUES ('monitor-old', 'wallpaper-old', 'fit', 789);",
+        ).unwrap();
+        drop(conn);
+
+        for _ in 0..2 {
+            let db = Db::open(&path).unwrap();
+            let wallpaper = db.get("wallpaper-old").unwrap().unwrap();
+            assert_eq!(wallpaper.storage_kind, "managed");
+            assert_eq!(wallpaper.file_path, "C:\\wallpapers\\old.jpg");
+            assert_eq!(wallpaper.name, "旧版保留名称");
+            assert_eq!(wallpaper.folder_id.as_deref(), Some("collection-old"));
+            assert_eq!((wallpaper.width, wallpaper.height, wallpaper.bytes), (1920, 1080, 345678));
+
+            let bindings = db.load_bindings().unwrap();
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(bindings[0].identity, "monitor-old");
+            assert_eq!(bindings[0].wallpaper_id.as_deref(), Some("wallpaper-old"));
+            assert_eq!(bindings[0].position, "fit");
+            assert!(bindings[0].rendered_path.is_none());
+        }
+
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

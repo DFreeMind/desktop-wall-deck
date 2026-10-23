@@ -17,3 +17,7 @@ src/lib/mockData.ts
 
 # WorkBuddy 本地临时文件
 .workbuddy/
+
+# 浏览器校验生成的本地日志与截图
+.playwright-mcp/
+output/playwright/

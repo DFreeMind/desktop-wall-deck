@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useReducedMotion } from "motion/react";
+import * as m from "motion/react-m";
 import { assetUrl } from "../lib/api";
+import { thumbnailVersion, useThumbnailRevision } from "../hooks/useThumbnailRevision";
 import type { Wallpaper } from "../lib/types";
-import { IconFolderMove, IconImage, IconMore, IconSearch, IconTrash } from "./icons";
+import { IconChevron, IconSort, IconPlus, IconHeart, IconGrid, IconList, IconExpand, IconFolderMove, IconImage, IconMore, IconRefresh, IconSearch, IconTrash } from "./icons";
 
 interface Props {
   wallpapers: Wallpaper[];
   /** 当前屏已使用的壁纸 id，用于打角标 */
   activeIds: Set<string>;
-  onDragStart: (id: string) => void;
-  onDragEnd: () => void;
-  onApply: (wallpaper: Wallpaper) => void;
+  screenLabels?: Map<string, string[]>;
+  selectedId: string | null;
+  draggingId: string | null;
+  onPointerDrag: (wallpaper: Wallpaper, event: React.PointerEvent<HTMLElement>) => void;
+  onSelect: (wallpaper: Wallpaper, toggle?: boolean) => void;
+  onPreview: (wallpaper: Wallpaper) => void;
+  onDetails: (wallpaper: Wallpaper) => void;
+  onRelink: (wallpaper: Wallpaper) => void;
+  onRefresh: () => void;
   onDelete: (wallpaper: Wallpaper) => void;
   onMove: (wallpaper: Wallpaper) => void;
   onImport: () => void;
@@ -23,30 +32,75 @@ interface Props {
   scopeHint: string;
   /** 导入按钮文案随范围变化，让用户知道会导到哪里 */
   importLabel: string;
+  filters?: React.ReactNode;
 }
 
 /**
  * 壁纸网格。
  *
- * 交互取舍：单击=设为壁纸（最高频动作，不该藏在二级菜单），
- * 拖拽=精确投放，更多菜单=归类与移除。这样 90% 的使用是零点击成本。
+ * 单击只选择并预览，应用动作在显示器面板明确执行。
+ * 拖拽到指定屏幕仍属于显式投放；更多菜单负责归类与移除。
  */
 export function WallpaperGrid({
   wallpapers,
   activeIds,
-  onDragStart,
-  onDragEnd,
-  onApply,
+  screenLabels,
+  selectedId,
+  draggingId,
+  onPointerDrag,
+  onSelect,
+  onPreview,
+  onDetails,
+  onRelink,
+  onRefresh,
   onDelete,
   onMove,
   onImport,
   onImportFolder,
   importing,
   scopeTitle,
-  scopeHint,
   importLabel,
+  filters,
 }: Props) {
+  const reduced = useReducedMotion();
+  const thumbnailRevision = useThumbnailRevision();
   const [query, setQuery] = useState("");
+  const [favorites, setFavorites] = useState<Set<string>>(() => {
+    try { const ids: unknown = JSON.parse(localStorage.getItem("wall-deck.favorites.v1") ?? "[]"); return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []); } catch { return new Set(); }
+  });
+  const [onlyFavorites, setOnlyFavorites] = useState(false);
+  const [favoriteError, setFavoriteError] = useState(false);
+  const toggleFavorite = (id: string) => {
+    const next = new Set(favorites);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    try { localStorage.setItem("wall-deck.favorites.v1", JSON.stringify([...next])); setFavoriteError(false); } catch { setFavoriteError(true); }
+    setFavorites(next);
+  };
+  const [sort, setSort] = useState("recent");
+  const [listView, setListView] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+  const [addPosition, setAddPosition] = useState({ top: 0, right: 0 });
+  useLayoutEffect(() => {
+    if (!addOpen) return;
+    const place = () => {
+      const rect = addRef.current!.getBoundingClientRect();
+      setAddPosition({ top: Math.min(rect.bottom + 6, window.innerHeight - 112), right: Math.max(12, window.innerWidth - rect.right) });
+    };
+    place();
+    addMenuRef.current?.querySelector('button')?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (!addRef.current?.contains(event.target as Node) && !addMenuRef.current?.contains(event.target as Node)) setAddOpen(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.stopPropagation(); setAddOpen(false); addRef.current?.focus(); }
+    };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", key, true); window.removeEventListener("resize", place); };
+  }, [addOpen]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   /** 菜单锚点：触发按钮的视口坐标 */
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -97,9 +151,9 @@ export function WallpaperGrid({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return wallpapers;
-    return wallpapers.filter((w) => w.name.toLowerCase().includes(q));
-  }, [wallpapers, query]);
+    const items = wallpapers.filter((w) => (!onlyFavorites || favorites.has(w.id)) && (!q || w.name.toLowerCase().includes(q)));
+    return items.sort((a, b) => sort === "name" ? a.name.localeCompare(b.name, "zh-CN") : sort === "size" ? b.width * b.height - a.width * a.height : b.createdAt - a.createdAt);
+  }, [wallpapers, query, sort, onlyFavorites, favorites]);
 
   const menuWallpaper = wallpapers.find((w) => w.id === menuFor) ?? null;
 
@@ -113,38 +167,49 @@ export function WallpaperGrid({
 
   return (
     <section className="library">
+      <div className="gallery-controls">
       <header className="library-head">
         <div className="library-title-wrap">
           <div className="library-title">
             <h2>{scopeTitle}</h2>
-            <span className="count">{wallpapers.length}</span>
+            <span className="count">{filtered.length} 张壁纸</span>
           </div>
-          <p className="library-sub">{scopeHint}</p>
         </div>
         <div className="library-tools">
+          <button className="icon-plain" title="刷新本地图片索引" onClick={onRefresh} disabled={importing}><IconRefresh size={15} /></button>
           <label className="search">
             <IconSearch size={13} />
             <input
-              placeholder="搜索名称"
+              placeholder="搜索壁纸名称…"
+              aria-label="搜索壁纸名称"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
-          <button
-            className="ghost"
-            onClick={onImportFolder}
-            disabled={importing}
-            title="选择一个本机文件夹，扫描其中的图片"
-          >
-            <IconFolderMove size={13} />
-            添加文件夹
-          </button>
-          <button className="primary" onClick={onImport} disabled={importing}>
-            {importing ? "导入中…" : importLabel}
-          </button>
+          <div className="gallery-add">
+            <button className="primary" onClick={onImport} disabled={importing} title={importLabel}><IconPlus size={16} />{importing ? "添加中…" : "添加壁纸"}</button>
+            <button ref={addRef} className="primary gallery-add-toggle" aria-label="展开添加菜单" aria-haspopup="menu" aria-expanded={addOpen} onClick={() => setAddOpen(!addOpen)} disabled={importing}><IconChevron size={14} /></button>
+          </div>
         </div>
       </header>
+      <div className="gallery-toolbar">
+        {filters}
+        <button className="gallery-favorite-filter" aria-pressed={onlyFavorites} onClick={() => setOnlyFavorites(!onlyFavorites)} title="筛选当前目录的收藏"><IconHeart size={15} />已收藏</button>
+        <div className="gallery-view-tools">
+          <label className="gallery-sort"><IconSort size={16} /><select aria-label="壁纸排序" value={sort} onChange={e => setSort(e.target.value)}><option value="recent">最近添加</option><option value="name">名称排序</option><option value="size">图片分辨率</option></select></label>
+          <div className="gallery-view-switch" aria-label="图库视图">
+            <button aria-label="网格视图" aria-pressed={!listView} onClick={() => setListView(false)}><IconGrid size={16} /></button>
+            <button aria-label="列表视图" aria-pressed={listView} onClick={() => setListView(true)}><IconList size={16} /></button>
+          </div>
+        </div>
+      </div>
+      </div>
+      {addOpen && createPortal(<div ref={addMenuRef} className="gallery-add-menu" role="menu" style={addPosition} onKeyDown={event => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); const items = Array.from(event.currentTarget.querySelectorAll('button')); const i = items.indexOf(document.activeElement as HTMLButtonElement); items[(i + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus(); }
+        if (event.key === "Tab") setAddOpen(false);
+      }}><button role="menuitem" onClick={() => { setAddOpen(false); addRef.current?.focus(); onImport(); }}><IconImage size={16} />添加图片</button><button role="menuitem" onClick={() => { setAddOpen(false); addRef.current?.focus(); onImportFolder(); }}><IconFolderMove size={16} />添加文件夹</button></div>, document.body)}
 
+      {favoriteError && <p role="status" className="hint">收藏已在本次会话生效，但未能保存到本机。请检查浏览器存储权限。</p>}
       {filtered.length === 0 ? (
         <div className="library-empty">
           {wallpapers.length === 0 ? (
@@ -154,7 +219,7 @@ export function WallpaperGrid({
               </span>
               <p className="empty-title">{query ? "没有匹配的壁纸" : "这里还没有壁纸"}</p>
               <p className="hint">
-                导入的图片会复制一份到库目录，之后删除原始文件也不影响使用。
+                添加本机图片或文件夹，只建立索引，不复制或修改原文件。
                 支持 JPG、PNG、WebP、BMP、GIF、TIFF、AVIF。
               </p>
               <div className="empty-actions">
@@ -168,40 +233,58 @@ export function WallpaperGrid({
               </div>
             </>
           ) : (
-            <p className="hint">没有匹配「{query}」的壁纸</p>
+            <p className="hint">{onlyFavorites && !query ? "当前目录还没有收藏的壁纸" : `没有匹配「${query}」的壁纸`}</p>
           )}
         </div>
       ) : (
-        <div className="grid" role="list">
-          {filtered.map((w) => {
+        <div className={`grid${listView ? " is-list-view" : ""}`} role="list">
+          {filtered.map((w, index) => {
             const active = activeIds.has(w.id);
             return (
-              <figure
+              <m.figure
                 key={w.id}
+                initial={index < 12 ? { opacity: 0, y: reduced ? 0 : 8 } : false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: reduced ? 0 : .24, delay: reduced ? 0 : Math.min(index, 7) * .018, ease: [.22, 1, .36, 1] }}
                 role="listitem"
-                className={`card${active ? " is-active" : ""}`}
-                draggable
-                onDragStart={(e) => {
-                  // 同时设置两个格式：自定义类型供画布精确识别，text 供系统兜底
-                  e.dataTransfer.setData("application/x-wallpaper-id", w.id);
-                  e.dataTransfer.setData("text/plain", w.id);
-                  e.dataTransfer.effectAllowed = "copy";
-                  closeMenu();
-                  onDragStart(w.id);
+                className={`card${active ? " is-active" : ""}${selectedId === w.id ? " is-selected" : ""}${draggingId === w.id ? " is-wallpaper-dragging" : ""}`}
+                tabIndex={0}
+                aria-current={selectedId === w.id ? "true" : undefined}
+                data-source-missing={w.missing || undefined}
+                data-wallpaper-id={w.id}
+                draggable={false}
+                onDragStart={(event) => event.preventDefault()}
+                onPointerDown={(event) => { closeMenu(); onPointerDrag(w, event); }}
+                onClick={() => onSelect(w, true)}
+                onDoubleClick={() => onPreview(w)}
+                onKeyDown={(e) => {
+                  if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                    e.preventDefault();
+                    onSelect(w, true);
+                  }
                 }}
-                onDragEnd={onDragEnd}
-                onClick={() => onApply(w)}
-                title={`${w.name} · ${w.width}×${w.height} · 点击设为壁纸`}
+                title={`${w.name} · ${w.width}×${w.height} · 单击选择或取消选择，双击查看大图；拖到显示器可直接设置`}
               >
+                {selectedId === w.id && <m.span className="card-selection-ring" layoutId={`wallpaper-selection-${scopeTitle}`} transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 440, damping: 38 }} />}
                 <div className="card-img">
                   <img
-                    src={assetUrl(w.thumbPath)}
+                    src={assetUrl(w.thumbPath, thumbnailVersion(thumbnailRevision, w.id))}
                     alt={w.name}
-                    loading="lazy"
+                    loading={index < 8 ? "eager" : "lazy"}
                     decoding="async"
                     draggable={false}
                   />
-                  {active && <span className="badge">使用中</span>}
+                  {active && <div className="card-usage"><span className="badge">使用中</span>{screenLabels?.get(w.id)?.length ? <span className="card-screen-label" title={screenLabels.get(w.id)!.join("、")}>{screenLabels.get(w.id)!.join(" · ")}</span> : null}</div>}
+                  <span className="card-resolution">{w.width} × {w.height}</span>
+                  {w.missing && <span className="badge source-missing">原文件不可用</span>}
+                  <button className={`card-favorite${favorites.has(w.id) ? " is-favorite" : ""}`} aria-label={`${favorites.has(w.id) ? "取消收藏" : "收藏"}：${w.name}`} aria-pressed={favorites.has(w.id)} title={favorites.has(w.id) ? "取消收藏" : "收藏"} onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); toggleFavorite(w.id); }}><IconHeart size={18} /></button>
+                  <button className="card-preview" title={`查看大图：${w.name}`} onClick={(e) => { e.stopPropagation(); onPreview(w); }} onDoubleClick={(e) => e.stopPropagation()}>
+                    <IconExpand size={14} />
+                  </button>
+
+                </div>
+                <figcaption>
+                  <span className="card-name">{w.name}</span>
                   <button
                     className="card-more"
                     title="更多操作"
@@ -219,14 +302,8 @@ export function WallpaperGrid({
                   >
                     <IconMore size={14} />
                   </button>
-                </div>
-                <figcaption>
-                  <span className="card-name">{w.name}</span>
-                  <span className="card-meta">
-                    {w.width}×{w.height}
-                  </span>
                 </figcaption>
-              </figure>
+              </m.figure>
             );
           })}
         </div>
@@ -244,10 +321,13 @@ export function WallpaperGrid({
         createPortal(
           <CardMenu
             anchor={anchor}
-            onApply={() => {
-              onApply(menuWallpaper);
+            onSelect={() => {
+              onSelect(menuWallpaper);
               closeMenu();
             }}
+            onPreview={() => { onPreview(menuWallpaper); closeMenu(); }}
+            onDetails={() => { onDetails(menuWallpaper); closeMenu(); }}
+            onRelink={menuWallpaper.storageKind === "indexed" ? () => { onRelink(menuWallpaper); closeMenu(); } : undefined}
             onMove={() => {
               onMove(menuWallpaper);
               closeMenu();
@@ -266,12 +346,18 @@ export function WallpaperGrid({
 /** 菜单本体：按锚点定位，并在贴近视口边缘时翻转方向。 */
 function CardMenu({
   anchor,
-  onApply,
+  onSelect,
+  onPreview,
+  onDetails,
+  onRelink,
   onMove,
   onDelete,
 }: {
   anchor: { x: number; y: number };
-  onApply: () => void;
+  onSelect: () => void;
+  onPreview: () => void;
+  onDetails: () => void;
+  onRelink?: () => void;
   onMove: () => void;
   onDelete: () => void;
 }) {
@@ -309,9 +395,12 @@ function CardMenu({
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <button role="menuitem" onClick={onApply}>
+      <button role="menuitem" onClick={onPreview}><IconExpand size={13} />查看大图</button>
+      <button role="menuitem" onClick={onDetails}><IconImage size={13} />图片详情</button>
+      {onRelink && <button role="menuitem" onClick={onRelink}><IconFolderMove size={13} />重新定位原文件…</button>}
+      <button role="menuitem" onClick={onSelect}>
         <IconImage size={13} />
-        设为壁纸
+        选择并预览
       </button>
       <button role="menuitem" onClick={onMove}>
         <IconFolderMove size={13} />

@@ -93,6 +93,24 @@ pub fn load_oriented(path: &Path) -> LibResult<DynamicImage> {
     Ok(apply_orientation(img, orientation))
 }
 
+/// 索引阶段只读图片头和 EXIF，不解码整张图片。
+pub fn oriented_dimensions(path: &Path) -> LibResult<(u32, u32)> {
+    let (width, height) = image::ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| LibError::Decode(e.to_string()))?
+        .into_dimensions().map_err(|e| LibError::Decode(e.to_string()))?;
+    Ok(if read_exif_orientation(path) >= 5 { (height, width) } else { (width, height) })
+}
+
+/// 网络下载按内容识别格式，同时保留本地导入的 EXIF 方向校正行为。
+pub fn load_oriented_bytes(bytes: &[u8]) -> LibResult<DynamicImage> {
+    let img = image::load_from_memory(bytes).map_err(|e| LibError::Decode(format!("下载内容不是支持的图片：{e}")))?;
+    let orientation = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(bytes)).ok()
+        .and_then(|data| data.get_field(exif::Tag::Orientation, exif::In::PRIMARY).and_then(|f| f.value.get_uint(0)))
+        .unwrap_or(1).clamp(1, 8) as u8;
+    Ok(apply_orientation(img, orientation))
+}
+
 /// 生成缩略图字节（PNG），长边不超过 `THUMB_EDGE`。
 ///
 /// # 为什么用 `resize` + LANCZOS 而不是 `thumbnail`

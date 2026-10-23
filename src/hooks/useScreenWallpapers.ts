@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, assetUrl } from "../lib/api";
 import type { Monitor, ScreenWallpaper, Wallpaper } from "../lib/types";
+import { thumbnailVersion, useThumbnailRevision } from "./useThumbnailRevision";
 
 /**
  * 计算每块屏当前实际展示的壁纸。
@@ -24,7 +25,9 @@ import type { Monitor, ScreenWallpaper, Wallpaper } from "../lib/types";
 export function useScreenWallpapers(
   monitors: Monitor[],
   wallpapers: Wallpaper[],
+  libraryReady = true,
 ): Map<string, ScreenWallpaper> {
+  const thumbnailRevision = useThumbnailRevision();
   /** path → dataURL；用 ref 存缓存，避免每次渲染重建对象 */
   const cacheRef = useRef(new Map<string, string | null>());
   /** 记录发起中的请求，防止同一条路径被并发解码多次 */
@@ -33,7 +36,10 @@ export function useScreenWallpapers(
 
   const byPath = useMemo(() => {
     const m = new Map<string, Wallpaper>();
-    for (const w of wallpapers) m.set(normalize(w.filePath), w);
+    for (const w of wallpapers) {
+      m.set(normalize(w.filePath), w);
+      if (w.cachedPath) m.set(normalize(w.cachedPath), w);
+    }
     return m;
   }, [wallpapers]);
 
@@ -50,7 +56,7 @@ export function useScreenWallpapers(
           wallpaper: hit,
           // 用缩略图而不是原图：画布上的屏只有一两百像素，
           // 原图可能几 MB，逐屏加载会让画布闪烁且拖慢首屏。
-          preview: assetUrl(hit.thumbPath),
+          preview: assetUrl(hit.thumbPath, thumbnailVersion(thumbnailRevision, hit.id)),
         });
         continue;
       }
@@ -63,10 +69,12 @@ export function useScreenWallpapers(
       });
     }
     return out;
-  }, [monitors, byPath, previewVersion]);
+  }, [monitors, byPath, previewVersion, thumbnailRevision]);
 
   // 为所有未命中库的外部壁纸补齐预览
   useEffect(() => {
+    // 显示器可能先返回。此时空列表不是“都在库外”，等待索引再决定是否解码原图。
+    if (!libraryReady) return;
     let cancelled = false;
 
     for (const mon of monitors) {
@@ -92,7 +100,7 @@ export function useScreenWallpapers(
     return () => {
       cancelled = true;
     };
-  }, [monitors, byPath]);
+  }, [monitors, byPath, libraryReady]);
 
   return map;
 }

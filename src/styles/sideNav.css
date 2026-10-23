@@ -1,0 +1,68 @@
+/* Deep navy navigation with a quiet, high contrast selection state. */
+.workspace-shell .sidenav {
+  width: 100%; min-width: 0; gap: 0; padding: 14px 10px 10px; overflow: hidden;
+  background: #142238; color: #e7edf7;
+}
+.workspace-shell .sidenav .nav-brand { gap: 10px; min-height: 62px; padding: 3px 9px 13px; flex-shrink: 0; }
+.workspace-shell .sidenav .nav-brand-mark { width: 34px; height: 34px; border-radius: 10px; background: #233b5d; color: #d8e6ff; box-shadow: inset 0 0 0 1px #365174; }
+.workspace-shell .sidenav .nav-brand strong { color: #f5f7fb; font-size: 14px; font-weight: 700; letter-spacing: .1px; white-space: nowrap; }
+.workspace-shell .sidenav .nav-brand div > span { margin-top: 2px; color: #aab9ce; font-size: 12px; line-height: 1.35; white-space: nowrap; }
+.workspace-shell .sidenav .nav-primary { flex-shrink: 0; }
+.workspace-shell .sidenav .nav-item {
+  position: relative; height: 38px; margin: 2px 0; padding: 0 10px; gap: 10px; border-radius: 8px;
+  color: #d0d9e7; font-size: 13px; font-weight: 550; line-height: 1;
+  transition: color .14s ease, background .14s ease;
+}
+.workspace-shell .sidenav .nav-item > svg { width: 17px; height: 17px; flex: 0 0 17px; color: #a8b9cf; stroke-width: 1.5; }
+.workspace-shell .sidenav .nav-item:hover { background: #1c304b; color: #fff; }
+.workspace-shell .sidenav .nav-item:hover > svg { color: #d7e5fb; }
+.workspace-shell .sidenav .nav-item.is-active { color: #fff; font-weight: 650; }
+.workspace-shell .sidenav .nav-item.is-active > svg { color: #e4efff; }
+.workspace-shell .sidenav .nav-active-surface { inset: 0; background: #24466f; box-shadow: inset 3px 0 #80b5ff; border-radius: 8px; }
+.workspace-shell .sidenav .nav-item:focus-visible, .workspace-shell .sidenav .nav-group-head button:focus-visible { outline: 2px solid #8bbcff; outline-offset: 2px; }
+.workspace-shell .sidenav .nav-count {
+  margin-left: auto; min-width: 20px; padding: 2px 6px; border-radius: 999px;
+  background: #263a55; color: #c2d0e2; font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums; text-align: center;
+}
+.workspace-shell .sidenav .nav-item.is-active .nav-count { background: #365b87; color: #fff; }
+.workspace-shell .sidenav .nav-group-tree { margin-top: 9px; padding-top: 10px; border-top: 1px solid #2a3c55; flex-shrink: 0; }
+.workspace-shell .sidenav .nav-filters .nav-item { height: 36px; }
+.workspace-shell .sidenav .nav-collections-scroll {
+  min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: #536983 transparent; margin: 0 -3px; padding: 0 3px 8px;
+}
+.workspace-shell .sidenav .nav-collections-scroll::-webkit-scrollbar { width: 5px; }
+.workspace-shell .sidenav .nav-collections-scroll::-webkit-scrollbar-thumb { background: #536983; border-radius: 5px; }
+.workspace-shell .sidenav .nav-collections-scroll .nav-group-tree { margin-top: 8px; padding-top: 9px; }
+.workspace-shell .sidenav .nav-group-head { min-height: 30px; padding: 0 4px 4px 10px; color: #aab9ce; font-size: 12px; font-weight: 650; letter-spacing: .1px; }
+.workspace-shell .sidenav .nav-group-head button.icon-btn { width: 27px; height: 27px; padding: 5px; color: #b5c4d8; border-radius: 7px; }
+.workspace-shell .sidenav .nav-group-head button.icon-btn:hover { color: #fff; background: #263e5d; }
+.workspace-shell .sidenav .nav-item.nav-folder {
+  height: 32px; min-width: 0; margin: 1px 0; padding-right: 6px; gap: 6px;
+  color: #cbd5e3; font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+.workspace-shell .sidenav .nav-item.nav-folder > svg { width: 15px; height: 15px; flex-basis: 15px; color: #a8b9cf; }
+.workspace-shell .sidenav .nav-item.nav-folder.is-active { color: #fff; }
+.workspace-shell .sidenav .nav-item.nav-folder.is-active > svg { color: #e4efff; }
+.workspace-shell .sidenav .nav-item.nav-folder .nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.workspace-shell .sidenav .nav-caret { display: grid; place-items: center; width: 13px; height: 18px; flex: 0 0 13px; color: #a8b9cf; border-radius: 3px; cursor: pointer; }
+.workspace-shell .sidenav .nav-caret:hover { background: #263e5d; color: #fff; }
+.workspace-shell .sidenav .nav-caret.is-hidden { visibility: hidden; }
+.workspace-shell .sidenav .nav-caret svg { transition: transform .15s ease; }
+.workspace-shell .sidenav .nav-caret.is-open svg { transform: rotate(90deg); }
+.workspace-shell .sidenav .nav-hint { margin: 2px 8px 8px 10px; color: #aab9ce; font-size: 12px; line-height: 1.55; }
+.workspace-shell .sidenav .nav-group-bottom { margin-top: 0; padding: 9px 0 0; border-top: 1px solid #2a3c55; flex-shrink: 0; background: #142238; }
+.workspace-shell .sidenav.is-rail { width: auto; flex-basis: auto; gap: 0; padding: 18px 8px 10px; overflow: visible; }
+.workspace-shell .sidenav.is-rail .nav-brand { min-height: 0; padding: 0 6px 18px; }
+.workspace-shell .sidenav.is-rail .nav-brand-mark { width: 34px; height: 34px; }
+.workspace-shell .sidenav.is-rail .nav-primary { width: 100%; }
+.workspace-shell .sidenav.is-rail .nav-item { height: 44px; margin: 3px 0; padding: 0; }
+.workspace-shell .sidenav.is-rail .nav-item > svg { width: 19px; height: 19px; flex-basis: 19px; }
+.workspace-shell .sidenav.is-rail .nav-group-bottom { margin-top: auto; padding-top: 10px; }
+@media (prefers-reduced-motion: reduce) { .workspace-shell .sidenav .nav-caret svg { transition: none; } }
+
+.workspace-shell .sidenav .nav-item.is-active { background: transparent; }
+.workspace-shell .sidenav .nav-item.is-active::before { display: none; }
+.workspace-shell .sidenav .nav-active-surface { position: absolute; inset: 0; pointer-events: none; }
+.workspace-shell .sidenav .nav-item > svg, .workspace-shell .sidenav .nav-item > span:not(.nav-active-surface) { position: relative; z-index: 1; }

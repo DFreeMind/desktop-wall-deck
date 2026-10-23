@@ -6,5 +6,5 @@ pub mod image_ops;
 pub mod model;
 pub mod service;
 
-pub use model::{Folder, FolderNode, FolderScan, ImportReport, MonitorBinding, Wallpaper};
+pub use model::{CacheCleanupReport, Folder, FolderNode, FolderScan, ImportReport, MonitorBinding, Wallpaper, WallpaperDetails};
 pub use service::Library;

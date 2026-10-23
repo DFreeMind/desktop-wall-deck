@@ -1,0 +1,201 @@
+/* 图片优先的双栏图库与多屏工作台。底部投放栏参与布局，不遮挡列表。 */
+.workspace-shell { grid-template-columns: 220px minmax(0, 1fr); }
+.workspace-shell.workspace-display { grid-template-columns: 68px minmax(0, 1fr); }
+.workspace-shell .content { padding: 0 28px 24px; gap: 20px; }
+.workspace-shell .content > .wallpaper-apply-bar { flex-shrink: 0; }
+.workspace-page { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.workspace-page > .display-page, .workspace-page > .library-page { padding: 20px 0 0; min-height: 0; flex: 1; overflow: hidden; }
+.workspace-page > .display-page { gap: 22px; }
+.workspace-page .library { flex: 1; min-height: 0; flex-shrink: 1; }
+.workspace-page .library-head { flex-shrink: 0; align-items: center; padding-bottom: 9px; gap: 16px; }
+.workspace-page .library-title h2 { font-size: 20px; letter-spacing: -.45px; font-weight: 650; }
+.workspace-page .library-sub { font-size: 12px; margin-top: 3px; }
+.workspace-page .library-tools { gap: 10px; }
+.workspace-page .library-tools .search { width: 202px; background: var(--surface); border-radius: 9px; padding: 8px 11px; }
+.workspace-page .library-tools > button { min-height: 36px; border-radius: 8px; padding-inline: 12px; }
+.workspace-page .library-tools > .icon-plain { padding: 7px; }
+.workspace-page .grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); grid-auto-rows: 194px; gap: 14px; padding: 4px 4px 16px; }
+.workspace-page .card { width: 100%; min-width: 0; height: 194px; border-radius: 11px; box-shadow: none; transition: border-color .16s, box-shadow .16s; }
+.workspace-page .card-img { height: 133px; aspect-ratio: auto; }
+.workspace-page .card figcaption { height: 59px; padding: 8px 11px; }
+.workspace-page .card-name { font-size: 13px; }
+.workspace-page .card-meta { font-size: 12px; margin-top: 4px; }
+.workspace-page .card:hover { transform: none; box-shadow: 0 7px 18px #233b6010; }
+.workspace-page .card:hover .card-img img { transform: scale(1.018); }
+.workspace-page .card.is-selected, .workspace-page .card.is-selected:hover { border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--theme-rgb) / 0.063); }
+.card-selection-ring { position: absolute; inset: 0; border: 2px solid var(--accent); border-radius: inherit; pointer-events: none; z-index: 3; }
+.gallery-filters { display: flex; gap: 6px; align-items: center; flex-shrink: 0; padding: 0 0 10px; }
+.gallery-filters > button, .gallery-filters > label { border: 0; padding: 7px 12px; border-radius: 7px; background: transparent; color: var(--text-3); font-size: 12px; white-space: nowrap; }
+.gallery-filters .is-current { background: var(--accent-soft); color: var(--accent); }
+.gallery-filters button span { margin-left: 7px; opacity: .7; font-variant-numeric: tabular-nums; }
+.gallery-filters select { border: none; padding: 0; font: inherit; color: inherit; background: transparent; max-width: 180px; cursor: pointer; }
+.gallery-filters select:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.gallery-key-hint { margin-left: auto; color: var(--text-3); font-size: 12px; }
+.workspace-page .canvas-wrap { padding: 15px 17px 12px; margin: 0; border-radius: 13px; box-shadow: none; flex-shrink: 0; }
+.workspace-page .canvas-head { margin-bottom: 10px; gap: 10px; }
+.workspace-page .canvas-head h1 { font-size: 14px; }
+.workspace-page .canvas-head-sub { font-size: 12px; }
+.workspace-page .canvas.is-overview { background: #f9fbfe; }
+.topology-reveal { overflow: hidden; }
+.workspace-page .display-page .library-title h2 { font-size: 15px; letter-spacing: 0; }
+.workspace-page .display-page .library-head { padding-bottom: 13px; }
+.workspace-shell .sidenav.is-rail { padding: 22px 9px 12px; gap: 12px; overflow: visible; }
+.sidenav.is-rail .nav-brand { padding: 0 5px 19px; }
+.sidenav.is-rail .nav-brand > div { display: none; }
+.sidenav.is-rail .nav-brand-mark { width: 32px; height: 32px; flex-shrink: 0; }
+.sidenav.is-rail .nav-text, .sidenav.is-rail .nav-count { display: none; }
+.sidenav.is-rail .nav-item { padding: 0; justify-content: center; height: 44px; margin-bottom: 8px; }
+.sidenav.is-rail .nav-item > svg { width: 19px; height: 19px; }
+.sidenav.is-rail .nav-group-bottom { border: 0; }
+.workspace-page > .page { padding: 26px 0 10px; }
+.workspace-page-sources { overflow-y: auto; }
+.workspace-page-settings, .workspace-page-collections { overflow-y: auto; }
+@media (max-width: 1080px) {
+  .workspace-shell { grid-template-columns: 176px minmax(0, 1fr); }
+  .workspace-shell .content { padding-inline: 18px; }
+  .workspace-page .library-head { flex-wrap: wrap; gap: 12px; }
+  .workspace-page .library-tools { margin-left: auto; }
+  .gallery-key-hint { display: none; }
+  .workspace-page .canvas-head-sub { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-width: 820px) {
+  .workspace-shell { grid-template-columns: 152px minmax(0, 1fr); }
+  .workspace-shell.workspace-display { grid-template-columns: 60px minmax(0, 1fr); }
+  .workspace-shell .content { padding-inline: 12px; }
+  .workspace-page .library-tools { flex-wrap: wrap; margin-left: 0; }
+  .workspace-page .canvas-head { flex-wrap: wrap; }
+  .workspace-page .canvas-head-actions { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .workspace-page .card-img img { transition: none; } }
+
+/* 画廊采用固定图片行高，工具栏保持紧凑清晰。 */
+.workspace-page .library-head { padding-bottom: 0; margin-bottom: 18px; gap: 18px; }
+.workspace-page .library-title { gap: 20px; }
+.workspace-page .library-title h2 { font-size: 24px; font-weight: 700; letter-spacing: -.6px; }
+.workspace-page .library-title .count { background: transparent; padding: 0; color: var(--text-2); font-size: 14px; font-weight: 400; }
+.workspace-page .library-tools .search { width: clamp(180px, 24vw, 320px); height: 38px; padding: 0 14px; border-radius: 12px; background: transparent; border: 1px solid #cddbec; }
+.gallery-add { display: flex; flex-shrink: 0; }
+.gallery-add > button { height: 38px; min-height: 38px; border-radius: 9px 0 0 9px; padding: 0 13px; font-size: 13px; font-weight: 500; }
+.gallery-add > .gallery-add-toggle { padding-inline: 10px; border-left: 1px solid #ffffff40; border-radius: 0 9px 9px 0; }
+.gallery-add-menu { position: fixed; z-index: 1500; width: 172px; padding: 6px; background: white; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-3); }
+.gallery-add-menu button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border: 0; background: transparent; text-align: left; font-size: 14px; }
+.gallery-toolbar { display: flex; align-items: center; gap: 12px; padding-bottom: 18px; flex-shrink: 0; }
+.gallery-toolbar .gallery-filters { padding: 0; flex: 1; min-width: 0; overflow-x: auto; }
+.gallery-filters > button, .gallery-filters > label { font-size: 13px; border-radius: 20px; color: var(--text-2); padding: 7px 14px; }
+.gallery-filters .is-current { background: linear-gradient(105deg, var(--accent) 35%, color-mix(in srgb, var(--accent), #b9b2ff 55%)); color: white; }
+.gallery-filters button span { opacity: 1; }
+.gallery-view-tools { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+.gallery-view-tools > select { border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; padding: 6px; }
+.gallery-view-switch { display: flex; padding: 3px; border: 1px solid #dce6f2; border-radius: 10px; }
+.gallery-view-switch button { display: grid; place-items: center; border: 0; background: transparent; color: var(--text-2); padding: 6px; }
+.gallery-view-switch button[aria-pressed=true] { color: var(--accent); background: var(--accent-soft); }
+.workspace-page .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); grid-auto-rows: 210px; gap: 20px; padding: 3px 3px 20px; }
+.workspace-page .card { height: 210px; border: 0; border-radius: 12px; background: white; box-shadow: 0 3px 12px #25476d06; }
+.workspace-page .card-img { height: 170px; background: #e9eff6; }
+.workspace-page .card-img img { object-fit: cover; }
+.workspace-page .card:hover .card-img img { transform: none; }
+.workspace-page .card figcaption { position: relative; height: 40px; padding: 10px 36px 10px 14px; }
+.workspace-page .card-name { font-size: 14px; }
+.workspace-page .card-more { top: 7px; right: 7px; width: 26px; height: 26px; background: transparent; color: var(--text-2); backdrop-filter: none; }
+.workspace-page .card-more:hover { background: var(--surface-3); }
+.card-resolution { position: absolute; bottom: 0; left: 0; padding: 3px 12px; border-radius: 0 8px 0 0; color: white; background: #142238b8; font-size: 12px; pointer-events: none; }
+.card-usage { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; pointer-events: none; }
+.card-usage .badge { position: static; border-radius: 8px; padding: 5px 9px; white-space: nowrap; }
+.card-screen-label { max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #142238bb; color: white; border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+.workspace-page .badge.source-missing { top: auto; bottom: 26px; background: var(--warning); }
+.workspace-page .grid.is-list-view { grid-template-columns: 1fr; grid-auto-rows: 96px; gap: 10px; }
+.workspace-page .is-list-view .card { height: 96px; display: flex; }
+.workspace-page .is-list-view .card-img { width: 164px; height: 96px; }
+.workspace-page .is-list-view .card figcaption { flex: 1; height: 96px; justify-content: center; padding-inline: 20px 48px; }
+.workspace-page .is-list-view .card-more { top: 34px; right: 16px; }
+
+@media (max-width: 1130px) {  .workspace-page .library-title h2 { font-size: 24px; } }
+@media (max-width: 880px) {  .gallery-toolbar { flex-wrap: wrap; } .gallery-view-tools { gap: 8px; } .workspace-page > .library-page { padding-top: 20px; } }
+@media (max-width: 600px) {  .workspace-page .library-tools .search { width: 180px; } }
+
+.gallery-add-toggle svg { transform: rotate(90deg); }
+
+.gallery-favorite-filter { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; white-space: nowrap; font-size: 13px; color: var(--text-2); }
+.gallery-favorite-filter[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); }
+.card-favorite { position: absolute; right: 10px; bottom: 10px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid #ffffff55; border-radius: 50%; color: white; background: #14223899; opacity: 0; transition: opacity .16s; }
+.card:hover .card-favorite, .card:focus-within .card-favorite, .card-favorite.is-favorite { opacity: 1; }
+.card-favorite.is-favorite svg { fill: currentColor; }
+.workspace-page .card-favorite:hover { background: #142238dd; }
+.workspace-page .card-preview { right: 48px; bottom: 10px; }
+@media (hover: none) { .card-favorite { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .card-favorite { transition: none; } }
+
+/* 清除旧标题间距，按设计稿统一工具栏比例。 */
+.workspace-page .library-tools { gap: 16px; }
+.workspace-page .library-tools .search { gap: 10px; }
+.workspace-page .library-tools .search input { width: 100%; min-width: 0; font-size: 13px; }
+.workspace-page .library-tools .search > svg { flex-shrink: 0; width: 16px; height: 16px; }
+.gallery-add > button.primary { box-shadow: none; }
+.gallery-toolbar .gallery-filters { gap: 10px; }
+.gallery-toolbar .gallery-filters > button, .gallery-toolbar .gallery-filters > label { padding: 6px 12px; }
+.gallery-favorite-filter { padding: 5px 7px; gap: 5px; }
+.gallery-view-tools { gap: 18px; }
+.gallery-view-switch { padding: 0; border-radius: 10px; }
+.gallery-view-switch button { width: 32px; height: 32px; border-radius: 9px; }
+.gallery-sort { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+.gallery-sort select { max-width: 120px; padding: 4px 0; border: 0; background: transparent; color: inherit; font-size: 13px; }
+.gallery-add-menu { width: 160px; padding: 5px; border-radius: 11px; }
+.gallery-add-menu button { padding: 9px 10px; font-size: 13px; }
+@media (max-width: 1080px) {
+.workspace-page .library-head { gap: 12px; }
+.workspace-page .library-tools { gap: 10px; }
+}
+
+.gallery-controls { flex-shrink: 0; min-width: 0; }
+/* 通用悬停样式不得覆盖分类的选中背景。 */
+.gallery-filters button.is-current:hover:not(:disabled),
+.gallery-filters button.is-current:active:not(:disabled),
+.gallery-filters button.is-current:focus-visible {
+  background: var(--accent-hover); color: #fff;
+}
+.gallery-filters button:not(.is-current):hover:not(:disabled) { background: var(--accent-soft); color: var(--text); }
+.gallery-favorite-filter[aria-pressed=true]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-hover); }
+.gallery-view-switch button[aria-pressed=true]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-hover); }
+/* 显示器页不使用分类行，将图库操作集中为一行。 */
+.workspace-page .display-page .gallery-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-bottom: 10px; }
+.workspace-page .display-page .library-head { display: contents; }
+.workspace-page .display-page .library-title-wrap { flex: 1 1 160px; }
+.workspace-page .display-page .library-title { gap: 12px; }
+.workspace-page .display-page .library-title h2 { font-size: 15px; }
+.workspace-page .display-page .gallery-toolbar { padding: 0; flex-wrap: nowrap; gap: 10px; }
+.workspace-page .display-page .library-tools .search { width: clamp(160px, 19vw, 260px); height: 34px; }
+.workspace-page .display-page .gallery-add > button { height: 34px; min-height: 34px; }
+.workspace-page .display-page { gap: 14px; }
+@media (max-width: 1050px) {
+.workspace-page .display-page .gallery-controls { gap: 8px 12px; }
+.workspace-page .display-page .library-title-wrap { flex-basis: 120px; }
+.workspace-page .display-page .gallery-toolbar { margin-left: auto; }
+}
+
+/* 真实拓扑和投放设置共用顶部工作台。 */
+.workspace-shell.workspace-display { grid-template-columns: 220px minmax(0, 1fr); }
+.display-studio { display: grid; grid-template-columns: minmax(0, 1fr) 240px; align-items: stretch; gap: 16px; }
+.display-studio-topology { min-width: 0; align-self: center; }
+.display-studio.is-collapsed { grid-template-columns: minmax(180px, .6fr) minmax(0, 1fr); align-items: center; gap: 12px; }
+.workspace-page .display-page .canvas-wrap { padding: 14px 16px; }
+.workspace-page .display-page .canvas-head { margin-bottom: 10px; }
+.workspace-page .display-page .canvas.is-overview { background: transparent; }
+.screen-number { position: absolute; top: 7px; left: 7px; z-index: 3; background: #122a46d9; color: white; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+.workspace-page .screen-tag-primary { left: 35px; right: auto; }
+.screen-pending-tag { position: absolute; bottom: 38px; right: 7px; padding: 2px 6px; border-radius: 5px; background: #fff4dc; color: #865500; font-size: 12px; z-index: 3; }
+.screen:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 1080px) {
+.workspace-shell.workspace-display { grid-template-columns: 176px minmax(0, 1fr); }
+.display-studio { grid-template-columns: minmax(0, 1fr) 240px; gap: 10px; }
+.display-studio.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+.display-studio.is-collapsed .display-studio-topology { display: none; }
+}
+@media (max-width: 820px) {
+.workspace-shell.workspace-display { grid-template-columns: 152px minmax(0, 1fr); }
+.display-studio { grid-template-columns: minmax(0, 1fr) 200px; }
+.display-studio .display-apply-panel { width: 100%; min-width: 0; }
+}
+
+/* 显示器始终占据主区域，只有显式收起时才使用横向操作条。 */
+
+.canvas-stage { position: relative; }

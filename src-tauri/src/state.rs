@@ -11,13 +11,14 @@ use parking_lot::RwLock;
 use crate::library::Library;
 use crate::wallpaper::{Topology, WallpaperWorker};
 
+#[derive(Clone)]
 pub struct AppState {
     pub worker: WallpaperWorker,
     pub library: Arc<Library>,
     pub data_dir: PathBuf,
 
     /// 最近一次枚举的拓扑快照；投放前仍需重新枚举，避免使用过期设备路径。
-    pub topology: RwLock<Option<Topology>>,
+    pub topology: Arc<RwLock<Option<Topology>>>,
 }
 
 impl AppState {
@@ -26,7 +27,7 @@ impl AppState {
             worker,
             library: Arc::new(library),
             data_dir,
-            topology: RwLock::new(None),
+            topology: Arc::new(RwLock::new(None)),
         }
     }
 

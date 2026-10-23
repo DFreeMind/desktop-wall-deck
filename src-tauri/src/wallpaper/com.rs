@@ -78,6 +78,24 @@ pub struct WallpaperWorker {
 }
 
 impl WallpaperWorker {
+    /// 只用于命令路由回归测试，不初始化 COM，也不修改真实桌面。
+    #[cfg(test)]
+    pub fn mock(monitors: Vec<RawMonitor>, calls: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>) -> Self {
+        let (tx, rx) = mpsc::channel::<Cmd>();
+        thread::spawn(move || {
+            for cmd in rx {
+                match cmd {
+                    Cmd::ListMonitors(reply) => { let _ = reply.send(Ok(monitors.clone())); }
+                    Cmd::SetWallpaper { monitor_id, reply, .. } => {
+                        calls.lock().unwrap().push(monitor_id);
+                        let _ = reply.send(Ok(()));
+                    }
+                }
+            }
+        });
+        Self { tx }
+    }
+
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<Cmd>();
 

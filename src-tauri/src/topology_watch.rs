@@ -88,10 +88,18 @@ pub fn apply_bindings(
         let Some(wallpaper_id) = &binding.wallpaper_id else {
             continue;
         };
-        let Some(original) = library.file_path_of(wallpaper_id).map_err(|e| e.to_string())? else {
+        let Some(_) = library.file_path_of(wallpaper_id).map_err(|e| e.to_string())? else {
             continue;
         };
-        let path = binding.rendered_path.as_deref().unwrap_or(&original);
+        let prepared;
+        let path = if let Some(path) = binding.rendered_path.as_deref() { path } else {
+            // 兼容旧绑定；新索引永远不直接把用户原文件交给系统。
+            prepared = match library.prepare_wallpaper(wallpaper_id) {
+                Ok(path) => path,
+                Err(error) => { eprintln!("[拓扑恢复] {error}"); continue; }
+            };
+            &prepared
+        };
         if !std::path::Path::new(path).is_file() {
             eprintln!("[拓扑恢复] 跳过「{}」：壁纸文件不存在", monitor.name);
             continue;

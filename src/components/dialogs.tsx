@@ -9,7 +9,7 @@ interface PromptProps {
   placeholder?: string;
   confirmText?: string;
   onCancel: () => void;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string) => void | Promise<void>;
 }
 
 /**
@@ -27,6 +27,8 @@ export function PromptDialog({
   onSubmit,
 }: PromptProps) {
   const [value, setValue] = useState(defaultValue);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -37,17 +39,25 @@ export function PromptDialog({
   // Esc 关闭：弹窗的默认预期，缺了会让人以为卡住
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape" && !busy) onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+  }, [onCancel, busy]);
 
   const trimmed = value.trim();
 
+  const submit = async () => {
+    if (!trimmed || busy) return;
+    setBusy(true); setError(null);
+    try { await onSubmit(trimmed); }
+    catch (e) { setError((e as Error).message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+
   return (
-    <div className="modal-mask" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal>
+    <div className="modal-mask" onClick={() => { if (!busy) onCancel(); }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal aria-label={title}>
         <h3 className="modal-title">{title}</h3>
         <input
           ref={inputRef}
@@ -55,15 +65,17 @@ export function PromptDialog({
           value={value}
           placeholder={placeholder}
           maxLength={40}
-          onChange={(e) => setValue(e.target.value)}
+          disabled={busy}
+          onChange={(e) => { setValue(e.target.value); setError(null); }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && trimmed) onSubmit(trimmed);
+            if (e.key === "Enter") void submit();
           }}
         />
+        {error && <p className="modal-error" role="alert">{error}</p>}
         <div className="modal-actions">
-          <button onClick={onCancel}>取消</button>
-          <button className="primary" disabled={!trimmed} onClick={() => onSubmit(trimmed)}>
-            {confirmText}
+          <button onClick={onCancel} disabled={busy}>取消</button>
+          <button className="primary" disabled={!trimmed || busy} onClick={() => void submit()}>
+            {busy ? "正在保存…" : confirmText}
           </button>
         </div>
       </div>

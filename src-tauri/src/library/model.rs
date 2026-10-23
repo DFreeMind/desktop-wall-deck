@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// 一张入库的壁纸。
 ///
-/// `filePath` 是库内规范化副本的绝对路径，`thumbPath` 是缩略图。
-/// 两者都由后端生成，前端只用于展示，不参与拼接。
+/// 本机图片 filePath 指向原文件；下载和旧版图片仍指向应用副本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Wallpaper {
@@ -19,6 +18,29 @@ pub struct Wallpaper {
     pub created_at: i64,
     /// 所属文件夹；`None` 表示位于库根目录（未归入任何文件夹）
     pub folder_id: Option<String>,
+    pub storage_kind: String,
+    pub missing: bool,
+    pub cached_path: Option<String>,
+}
+
+/// 壁纸文件详情；`indexed_at` 是入库时间，文件创建/修改时间来自原文件系统元数据。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperDetails {
+    pub id: String,
+    pub name: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub parent_path: String,
+    pub extension: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
+    pub indexed_at: i64,
+    pub file_created_at: Option<i64>,
+    pub file_modified_at: Option<i64>,
+    pub exists: bool,
+    pub storage_kind: String,
 }
 
 /// 壁纸文件夹。
@@ -70,6 +92,7 @@ pub struct MonitorBinding {
 #[serde(rename_all = "camelCase")]
 pub struct ImportReport {
     pub added: usize,
+    pub updated: usize,
     pub skipped: usize,
     pub failed: Vec<ImportFailure>,
 }
@@ -92,4 +115,33 @@ pub struct FolderScan {
     pub path: String,
     pub total: usize,
     pub already_in_library: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFolder {
+    pub id: String,
+    pub path: String,
+    pub folder_id: Option<String>,
+    pub available: bool,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStorage {
+    pub count: usize,
+    pub indexed_bytes: u64,
+    pub managed_bytes: u64,
+    pub thumbnail_bytes: u64,
+    pub rendered_bytes: u64,
+}
+
+/// 受控缓存清理结果；文件计数与释放空间均使用无符号整数。
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheCleanupReport {
+    pub removed_files: usize,
+    pub freed_bytes: u64,
+    pub skipped_files: usize,
+    pub failed_files: usize,
 }

@@ -7,6 +7,15 @@
 
 use desktop_wall_deck_lib::test_api;
 
+fn normalized_path(path: &str) -> String {
+    let without_prefix = path
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| path.strip_prefix(r"\\?\").map(str::to_owned))
+        .unwrap_or_else(|| path.to_owned());
+    without_prefix.replace('/', "\\").to_lowercase()
+}
+
 #[test]
 fn 设置壁纸后回读一致并恢复原状() {
     let root = std::env::temp_dir().join(format!("dwd-apply-{}", std::process::id()));
@@ -23,6 +32,7 @@ fn 设置壁纸后回读一致并恢复原状() {
     let report = lib.import(&[src], None).unwrap();
     assert_eq!(report.added, 1);
     let wp = test_api::list(&lib).unwrap().into_iter().next().unwrap();
+    let apply_path = lib.prepare_wallpaper(&wp.id).unwrap();
 
     let worker = test_api::new_worker();
     let before = test_api::list_monitors(&worker).expect("枚举显示器失败");
@@ -32,13 +42,13 @@ fn 设置壁纸后回读一致并恢复原状() {
     let original = target.wallpaper.clone();
     println!("目标显示器：{}", target.device_path);
     println!("原壁纸：{:?}", original);
-    println!("新壁纸：{}", wp.file_path);
+    println!("新壁纸投放缓存：{apply_path}");
 
     // 设置为填充模式并投放
     let applied = test_api::set_wallpaper(
         &worker,
         Some(target.device_path.clone()),
-        &wp.file_path,
+        &apply_path,
         test_api::position_fill(),
     );
     println!("投放结果：{applied:?}");
@@ -53,9 +63,7 @@ fn 设置壁纸后回读一致并恢复原状() {
     println!("回读壁纸：{:?}", current);
     let ok = current
         .as_ref()
-        .map(|c| {
-            c.to_lowercase().replace('/', "\\") == wp.file_path.to_lowercase().replace('/', "\\")
-        })
+        .map(|c| normalized_path(c) == normalized_path(&apply_path))
         .unwrap_or(false);
 
     // 无论成败都恢复原壁纸
