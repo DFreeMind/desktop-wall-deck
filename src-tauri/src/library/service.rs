@@ -841,7 +841,8 @@ mod tests {
         let p = std::env::temp_dir().join(format!("dwd-test-{tag}-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
-        p
+        // 与生产路径使用同一规范形式，避免 Windows 临时目录短路径别名导致断言不一致。
+        canonical_source(&p).unwrap()
     }
 
     fn write_png(dir: &Path, name: &str) -> PathBuf {
