@@ -1,3 +1,6 @@
+import { AnimatePresence, useReducedMotion } from "motion/react";
+import * as m from "motion/react-m";
+
 export interface ToastItem {
   id: string;
   text: string;
@@ -16,19 +19,25 @@ interface Props {
  * 失败信息同样用提示条，但停留时间更长且可手动关闭。
  */
 export function Toast({ items, onDismiss }: Props) {
-  if (items.length === 0) return null;
+  const reduced = useReducedMotion();
   return (
     <div className="toasts">
-      {items.map((t) => (
-        <div
+      <AnimatePresence>
+        {items.map((t) => (
+        <m.div
           key={t.id}
           className={`toast toast-${t.kind}`}
+          initial={{ opacity: 0, y: reduced ? 0 : 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: reduced ? 0 : 4 }}
+          transition={{ duration: reduced ? 0 : .16 }}
           onClick={() => onDismiss(t.id)}
           role="status"
         >
           {t.text}
-        </div>
-      ))}
+        </m.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }

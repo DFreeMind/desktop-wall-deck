@@ -1,31 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Monitor, ScreenWallpaper, Topology } from "../lib/types";
+import { assetUrl } from "../lib/api";
+import { thumbnailVersion, useThumbnailRevision } from "../hooks/useThumbnailRevision";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Monitor, Position, Wallpaper, ScreenWallpaper, Topology } from "../lib/types";
 import { isPortrait, monitorAspect, monitorSize } from "../lib/types";
+import type { WallpaperDragState } from "../hooks/useWallpaperDrag";
+import { WallpaperDropFeedback } from "./WallpaperDropFeedback";
 
 interface Props {
   topology: Topology | null;
+  collapsed?: boolean;
+  pendingWallpaper?: Wallpaper | null;
+  position?: Position;
   /** 每块屏当前实际展示的壁纸；没有条目表示该屏当前无壁纸 */
   wallpaperMap: Map<string, ScreenWallpaper>;
   selected: Set<string>;
   onToggleSelect: (identity: string, additive: boolean) => void;
-  onDropWallpaper: (wallpaperId: string, identities: string[], applyAll: boolean) => void;
-  /** 从壁纸库拖拽时携带的壁纸 id，由父组件在 dragstart 时写入 */
-  draggingId: string | null;
+  drag: WallpaperDragState | null;
+  externalTargetId?: string | null;
   /** 点击未分配壁纸的屏幕：引导用户去选图 */
   onPickFor: (identity: string) => void;
 }
 
-const PAD = 26;
-/** 画布高度上下限：低于 210 显示器缩得看不清，高于 400 会挤压下方壁纸库 */
-const MIN_H = 210;
+const PAD = 20;
+/** 设置卡占用固定高度；画布在此基础上按空间自适应，最高 400px。 */
+const MIN_H = 260;
 const MAX_H = 400;
-/**
- * 单块显示器在画布上的最小高度。
- *
- * 低于这个值，屏名与分辨率两行字会重叠、空态提示也放不下。
- * 130 是实测「招牌文字 + 一行元信息」都不挤的下限。
- */
-const MIN_SCREEN_H = 130;
 
 /**
  * 显示器拓扑画布。
@@ -37,17 +36,39 @@ const MIN_SCREEN_H = 130;
  */
 export function TopologyCanvas({
   topology,
+  collapsed = false,
+  pendingWallpaper = null,
+  position = "fill",
+  externalTargetId = null,
   wallpaperMap,
   selected,
   onToggleSelect,
-  onDropWallpaper,
-  draggingId,
+  drag,
   onPickFor,
 }: Props) {
+  const revision = useThumbnailRevision();
   const [hover, setHover] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [boxW, setBoxW] = useState(800);
+  const [heightBudget, setHeightBudget] = useState(MAX_H);
+
+  useEffect(() => {
+    const page = boxRef.current?.closest<HTMLElement>(".display-page");
+    if (!page) return;
+    const libraryHead = page.querySelector<HTMLElement>(".gallery-controls");
+    const canvasHead = page.querySelector<HTMLElement>(".canvas-head");
+    const measure = () => {
+      // 为一排固定高度的壁纸和工具栏留位；窗口较矮时按比例缩小画布，文字沿用既有降级规则。
+      const reserved = 210 + (libraryHead?.getBoundingClientRect().height ?? 48) + (canvasHead?.getBoundingClientRect().height ?? 30) + 88;
+      setHeightBudget(Math.max(140, Math.min(MAX_H, Math.floor(page.clientHeight - reserved))));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(page);
+    if (libraryHead) observer.observe(libraryHead);
+    if (canvasHead) observer.observe(canvasHead);
+    return () => observer.disconnect();
+  }, []);
 
   // 画布宽度决定缩放比，窗口缩放时要重算
   useEffect(() => {
@@ -61,32 +82,17 @@ export function TopologyCanvas({
     return () => ro.disconnect();
   }, []);
 
-  /**
-   * 画布高度。
-   *
-   * 关键约束：横向并排的显示器（本机就是 3 块成一排）包围盒很扁，
-   * 若只按「铺满宽度」算高度，单块屏会被压到 100px 左右，
-   * 名字、分辨率、空态提示全挤在一起。
-   *
-   * 因此反过来以「最矮的那块屏至少要有多高」为基准推画布高度：
-   * 单屏高度 = 画布可用高 × (屏高 / 包围盒高)，要求它不低于 MIN_SCREEN_H，
-   * 于是画布可用高 ≥ MIN_SCREEN_H × 包围盒高 / 屏高。
-   */
+  // 用整组屏幕的包围盒计算最佳高度；屏幕数量与排列变化后自动重新适配。
   const canvasH = useMemo(() => {
-    if (!topology || topology.monitors.length === 0) return MIN_H;
-    const b = topology.bounds;
-    const bh = Math.max(1, b.bottom - b.top);
-
-    // 最矮的屏（按包围盒高归一）
-    let minRatio = 1;
-    for (const m of topology.monitors) {
-      const h = Math.max(1, m.rect.bottom - m.rect.top);
-      minRatio = Math.min(minRatio, h / bh);
-    }
-    const neededByShortest = (MIN_SCREEN_H / Math.max(0.05, minRatio)) + PAD * 2;
-
-    return Math.round(Math.min(MAX_H, Math.max(MIN_H, neededByShortest)));
-  }, [topology]);
+    if (collapsed) return 100;
+    if (!topology || !topology.monitors.length) return MIN_H;
+    const bw = Math.max(1, topology.bounds.right - topology.bounds.left);
+    const bh = Math.max(1, topology.bounds.bottom - topology.bounds.top);
+    const widthFitHeight = Math.max(1, boxW - PAD * 2) / bw * bh + PAD * 2;
+    return Math.max(MIN_H, Math.min(MAX_H, heightBudget, Math.ceil(widthFitHeight)));
+  }, [topology, collapsed, boxW, heightBudget]);
+  const stageW = boxW;
+  const stageH = canvasH - 2;
 
   const layout = useMemo(() => {
     if (!topology || topology.monitors.length === 0) return null;
@@ -94,42 +100,27 @@ export function TopologyCanvas({
     const bw = Math.max(1, b.right - b.left);
     const bh = Math.max(1, b.bottom - b.top);
 
-    const availW = Math.max(200, boxW - PAD * 2);
-    const availH = canvasH - PAD * 2;
+    const padding = collapsed ? 8 : PAD;
+    const availW = Math.max(1, stageW - padding * 2);
+    const availH = Math.max(1, stageH - padding * 2);
     // 取较小的缩放比，保证整体既不溢出宽也不溢出高
     const scale = Math.min(availW / bw, availH / bh);
 
-    const offX = (boxW - bw * scale) / 2;
-    const offY = (canvasH - bh * scale) / 2;
+    const offX = (stageW - bw * scale) / 2;
+    const offY = (stageH - bh * scale) / 2;
 
     return topology.monitors.map((m) => ({
       monitor: m,
       left: Math.round(offX + (m.rect.left - b.left) * scale),
       top: Math.round(offY + (m.rect.top - b.top) * scale),
-      width: Math.round(Math.max(16, (m.rect.right - m.rect.left) * scale)),
-      height: Math.round(Math.max(16, (m.rect.bottom - m.rect.top) * scale)),
+      width: Math.round(Math.max(1, (m.rect.right - m.rect.left) * scale)),
+      height: Math.round(Math.max(1, (m.rect.bottom - m.rect.top) * scale)),
     }));
-  }, [topology, boxW, canvasH]);
-
-  const handleDrop = useCallback(
-    (monitor: Monitor, e: React.DragEvent) => {
-      e.preventDefault();
-      setDragOver(null);
-      const id = e.dataTransfer.getData("application/x-wallpaper-id") || draggingId;
-      if (!id) return;
-      // 拖到画布上：若该屏已被选中且选中数 >1，则按选中的应用；否则只作用于该屏
-      const targets =
-        selected.has(monitor.identity) && selected.size > 1
-          ? Array.from(selected)
-          : [monitor.identity];
-      onDropWallpaper(id, targets, false);
-    },
-    [draggingId, onDropWallpaper, selected],
-  );
+  }, [topology, stageW, stageH, collapsed]);
 
   if (!topology) {
     return (
-      <div className="canvas-empty" ref={boxRef} style={{ height: MIN_H }}>
+      <div className="canvas-empty" ref={boxRef} style={{ height: canvasH }}>
         <span>正在读取显示器信息…</span>
       </div>
     );
@@ -137,22 +128,28 @@ export function TopologyCanvas({
 
   if (topology.monitors.length === 0) {
     return (
-      <div className="canvas-empty" ref={boxRef} style={{ height: MIN_H }}>
+      <div className="canvas-empty" ref={boxRef} style={{ height: canvasH }}>
         <span>未检测到显示器</span>
       </div>
     );
   }
 
   return (
-    <div className="canvas" ref={boxRef} style={{ height: canvasH }}>
+    <div className="canvas is-overview" ref={boxRef} style={{ height: canvasH }} aria-label="显示器布局，按实际排列自动适配全部屏幕">
+      <div className="canvas-stage" style={{ width: stageW, height: stageH }}>
       {/* 坐标系底纹，暗示这是桌面的空间关系而不是普通容器 */}
       <div className="canvas-grid" aria-hidden />
 
-      {layout?.map(({ monitor, left, top, width, height }) => {
+      {layout?.map(({ monitor, left, top, width, height }, index) => {
         const isSelected = selected.has(monitor.identity);
         const isHover = hover === monitor.identity;
-        const isDragOver = dragOver === monitor.identity;
-        const sw = wallpaperMap.get(monitor.identity);
+        const isDropTarget = !!drag?.targetIds.includes(monitor.identity);
+        const currentWallpaper = wallpaperMap.get(monitor.identity);
+        const previewPending = isSelected && !!pendingWallpaper && !pendingWallpaper.missing && position !== "tile";
+        const changed = previewPending && (currentWallpaper?.kind !== "library" || currentWallpaper.wallpaper.id !== pendingWallpaper.id);
+        const sw: ScreenWallpaper | undefined = previewPending
+          ? { kind: "library", wallpaper: pendingWallpaper, preview: assetUrl(pendingWallpaper.thumbPath, thumbnailVersion(revision, pendingWallpaper.id)) }
+          : currentWallpaper;
         // 只有真正拿到预览图才算「有壁纸」，否则仍按空屏渲染占位，
         // 避免出现「有壁纸但显示为空灰色块」的半吊子状态
         const hasImage = !!sw && sw.preview !== null;
@@ -180,7 +177,10 @@ export function TopologyCanvas({
               "screen",
               isSelected ? "is-selected" : "",
               isHover ? "is-hover" : "",
-              isDragOver ? "is-dragover" : "",
+              externalTargetId === monitor.identity ? "is-external-drop-target" : "",
+              drag?.phase === "dragging" ? "is-drop-ready" : "",
+              isDropTarget ? `is-drop-target is-drop-${drag!.phase}` : "",
+              drag?.phase === "dragging" && drag.targetIds.length && !isDropTarget ? "is-drop-muted" : "",
               hasImage ? "has-wallpaper" : "is-blank",
               compact ? "is-compact" : "",
               tiny ? "is-tiny" : "",
@@ -193,18 +193,17 @@ export function TopologyCanvas({
               width,
               height,
               // 壁纸用作底色，让用户一眼看到当前状态
+              backgroundSize: previewPending ? position === "fit" ? "contain" : position === "stretch" ? "100% 100%" : position === "center" ? `${pendingWallpaper!.width * width / w}px ${pendingWallpaper!.height * height / h}px` : "cover" : undefined,
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "center",
               backgroundImage: hasImage ? `url("${sw!.preview}")` : undefined,
             }}
+            role="button" tabIndex={0} aria-pressed={isSelected}
+            onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onToggleSelect(monitor.identity, e.ctrlKey || e.metaKey); } }}
             onMouseEnter={() => setHover(monitor.identity)}
             onMouseLeave={() => setHover(null)}
             onClick={(e) => onToggleSelect(monitor.identity, e.ctrlKey || e.metaKey)}
-            onDragOver={(e) => {
-              // 必须 preventDefault 才允许 drop
-              e.preventDefault();
-              setDragOver(monitor.identity);
-            }}
-            onDragLeave={() => setDragOver((d) => (d === monitor.identity ? null : d))}
-            onDrop={(e) => handleDrop(monitor, e)}
+            data-wallpaper-drop-target={monitor.identity}
             title={`${monitor.name} · ${w}×${h}${
               !sw
                 ? " · 未设置壁纸"
@@ -213,6 +212,8 @@ export function TopologyCanvas({
                   : " · 当前壁纸来自系统（不在库中）"
             }`}
           >
+            {externalTargetId === monitor.identity && <div className="screen-external-drop-note"><span>松开，仅设置到此屏</span></div>}
+            <WallpaperDropFeedback drag={drag} identity={monitor.identity} small={height < 105} />
             {!hasImage && (
               <div className="screen-blank-inner">
                 {showBlankGlyph && (
@@ -247,6 +248,8 @@ export function TopologyCanvas({
             )}
 
             {hasImage && <div className="screen-shade" />}
+            <span className="screen-number" title="本次检测的显示器编号">{index + 1}</span>
+            {changed && <span className="screen-pending-tag">待应用</span>}
 
             <div className="screen-label">
               <span className="screen-name">{monitor.name}</span>
@@ -269,6 +272,7 @@ export function TopologyCanvas({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

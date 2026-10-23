@@ -3,6 +3,8 @@
 mod commands;
 mod display_watch;
 mod library;
+mod online;
+mod preview_cache;
 mod state;
 mod topology_watch;
 mod wallpaper;
@@ -53,7 +55,7 @@ pub mod test_api {
     }
 }
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use library::Library;
 use state::AppState;
@@ -83,9 +85,17 @@ pub fn run() {
 
             let state = AppState::new(worker.clone(), library, data_dir.clone());
 
-            // 缩略图是派生文件，可能因目录被清理或拷贝时遗漏而缺失，
-            // 表现为列表一片灰块。原图还在，启动后顺手补齐，不打扰用户。
-            state.library.repair_thumbnails().ok();
+            // 自愈放到后台，不能在首屏之前逐张解码原图。
+            let repair_library = state.library.clone();
+            let repair_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(e) = repair_library.refresh_sources() { eprintln!("[来源扫描] {e}"); }
+                let _ = repair_app.emit("library://changed", ());
+                match repair_library.repair_thumbnails_with_progress(|ids| { let _ = repair_app.emit("library://thumbnails-repaired", ids); }) {
+                    Err(e) => eprintln!("[缩略图修复] {e}"),
+                    _ => {}
+                }
+            });
 
             // 拓扑变化 → 重放绑定的处理线程
             // 注意：worker 是 Clone 语义（内部共享 channel），传克隆值避免所有权移动
@@ -93,14 +103,7 @@ pub fn run() {
             // 系统显示配置变化的来源
             display_watch::spawn_listener(tx);
 
-            // 启动时预热一次拓扑，让前端首屏不用等待 COM 冷启动
-            if let Ok(raw) = worker.list_monitors() {
-                let topology = wallpaper::Topology::from_monitors(
-                    wallpaper::identity::build_monitors(raw),
-                );
-                state.store_topology(topology);
-            }
-
+            // 首次枚举由前端异步请求；setup 不再预热后马上重复枚举。
             app.manage(state);
 
             // —— 诊断：确认 WebView 是否真的加载了内嵌前端资源 ——
@@ -132,8 +135,11 @@ pub fn run() {
             commands::apply_wallpaper,
             commands::apply_span,
             commands::library_list,
+            commands::wallpaper_details,
+            commands::wallpaper_reveal,
             commands::library_list_in_folder,
             commands::library_import,
+            commands::library_import_file,
             commands::library_remove,
             commands::library_rename,
             commands::library_usage,
@@ -141,6 +147,8 @@ pub fn run() {
             commands::library_scan_folder,
             commands::library_import_folder,
             commands::library_repair_thumbnails,
+            commands::library_cache_cleanup,
+            commands::library_open_data_dir,
             commands::current_wallpaper_preview,
             commands::folder_create,
             commands::folder_rename,
@@ -149,6 +157,16 @@ pub fn run() {
             commands::fit_advice,
             commands::asset_url,
             commands::data_dir,
+            commands::online_search,
+            commands::online_import,
+            commands::wallpaper_original,
+            commands::source_folders,
+            commands::source_rescan,
+            commands::source_relocate,
+            commands::source_remove,
+            commands::library_relink,
+            commands::library_storage,
+            commands::library_refresh,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");

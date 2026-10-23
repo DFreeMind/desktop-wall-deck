@@ -13,17 +13,18 @@
     "windows": [
       {
         "title": "桌面壁纸",
-        "width": 1180,
-        "height": 760,
+        "width": 1360,
+        "height": 880,
         "minWidth": 940,
         "minHeight": 620,
+        "dragDropEnabled": true,
         "resizable": true,
         "center": true,
         "decorations": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; frame-src https://unsplash.com https://*.unsplash.com https://wallhaven.cc https://*.wallhaven.cc https://commons.wikimedia.org https://*.wikimedia.org https://www.desktopography.net https://images.nasa.gov https://*.nasa.gov https://www.pexels.com",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob: https://th.wallhaven.cc https://images-assets.nasa.gov https://upload.wikimedia.org https://thumb.wikimedia.org; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/**", "$APPLOCALDATA/**", "$TEMP/**"]
@@ -33,7 +34,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
       "nsis": {
         "languages": ["SimpChinese"],

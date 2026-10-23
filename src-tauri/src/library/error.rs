@@ -25,6 +25,10 @@ pub enum LibError {
 
 pub type LibResult<T> = Result<T, LibError>;
 
+impl From<std::io::Error> for LibError {
+    fn from(e: std::io::Error) -> Self { LibError::Io(e.to_string()) }
+}
+
 impl From<rusqlite::Error> for LibError {
     fn from(e: rusqlite::Error) -> Self {
         LibError::Db(e.to_string())

@@ -7,18 +7,18 @@
 
 :root {
   /* 底色略偏冷，与白卡片形成更清晰的层次；纯灰会让整屏发闷 */
-  --bg: #f4f5f7;
+  --bg: #f5f8fc;
   --surface: #ffffff;
-  --surface-2: #f3f4f6;
-  --surface-3: #e9ebef;
+  --surface-2: #f6f8fc;
+  --surface-3: #eaf0f7;
   --border: rgba(15, 23, 42, 0.08);
   --border-strong: rgba(15, 23, 42, 0.14);
 
   --text: #14171f;
-  --text-2: #5c6270;
-  --text-3: #939aa8;
+  --text-2: #44546b;
+  --text-3: #58677c;
 
-  --accent: #2f6fed;
+  --accent: #246bfa;
   --accent-hover: #2563d8;
   --accent-soft: #eaf1fe;
   --accent-border: #bcd3fb;
@@ -30,8 +30,8 @@
   --success-soft: #eaf6ef;
 
   --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
+  --r-md: 12px;
+  --r-lg: 16px;
 
   /* 阴影分三档：贴着表面的微影、浮起元素、弹层。
      统一在此定义，避免各处随手写 rgba 导致深浅不一。 */
@@ -57,13 +57,13 @@ body,
 
 body {
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
   color: var(--text);
   background: var(--bg);
   /* 桌面应用不应有网页式的文本选择行为 */
   user-select: none;
-  -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: auto;
   overflow: hidden;
 }
 
@@ -99,7 +99,7 @@ button.primary {
 }
 
 button.primary:hover:not(:disabled) {
-  background: #2559c4;
+  background: var(--accent-hover);
 }
 
 button.ghost {

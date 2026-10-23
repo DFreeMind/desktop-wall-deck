@@ -1,0 +1,16 @@
+.external-file-drop-layer { position: fixed; inset: 0; pointer-events: none; z-index: 650; }
+.external-file-drop { position: fixed; top: 14px; left: 0; right: 0; margin-inline: auto; width: max-content; min-width: 330px; max-width: min(780px, calc(100vw - 32px)); padding: 13px 16px; border: 1px solid var(--accent); border-radius: 15px; background: #fffffff2; backdrop-filter: blur(14px); box-shadow: 0 12px 36px #1b355426; color: var(--text); }
+.external-file-drop-heading { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.external-file-drop-icon { flex-shrink: 0; width: 37px; height: 37px; display: grid; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+.external-file-drop-heading > div { min-width: 0; }
+.external-file-drop-heading strong { display: block; max-width: 650px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.external-file-drop-heading [role=status] { display: block; color: var(--text-2); font-size: 12px; margin-top: 3px; }
+.external-file-drop .drop-shelf-targets { margin-top: 12px; pointer-events: auto; }
+.external-file-drop .drop-shelf-target.is-drop-target { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px rgb(var(--theme-rgb) / 0.078); }
+.external-file-drop.is-success { border-color: #a7d6be; }
+.external-file-drop.is-success .external-file-drop-icon { background: var(--success-soft); color: var(--success); }
+.external-file-drop.is-error { border-color: #ebc1b9; }
+.external-file-drop.is-error .external-file-drop-icon { background: var(--danger-soft); color: var(--danger); }
+.screen.is-external-drop-target { outline: 3px solid var(--accent); outline-offset: 3px; box-shadow: 0 0 0 8px rgb(var(--theme-rgb) / 0.094); }
+.screen-external-drop-note { position: absolute; inset: 0; display: grid; place-items: center; z-index: 4; background: #13325740; pointer-events: none; }
+.screen-external-drop-note span { padding: 7px 12px; border-radius: 7px; background: #fffffff2; color: var(--accent); font-size: 12px; box-shadow: 0 3px 12px #11263d22; }

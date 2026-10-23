@@ -1,5 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useReducedMotion } from "motion/react";
+import * as m from "motion/react-m";
 import type { FolderNode, LibraryScope } from "../lib/types";
+import "../styles/sideNav.css";
 import {
   IconChevron,
   IconDisplay,
@@ -15,6 +18,7 @@ export type NavView = "display" | "library" | "collections" | "sources" | "setti
 
 interface Props {
   view: NavView;
+  compact?: boolean;
   onViewChange: (v: NavView) => void;
   scope: LibraryScope;
   onScopeChange: (s: LibraryScope) => void;
@@ -29,8 +33,8 @@ interface Props {
 /**
  * 左侧导航。
  *
- * 把「功能模块」和「合集目录」放在同一列，是因为它们本质上都是
- * 「切换右侧内容区的筛选条件」。分成两栏会让用户在两个方向上进进出出。
+ * 顶部是显示器、壁纸库和合集管理三个功能页面；下面才是壁纸分类。
+ * 显示器页不继承分类，分类与合集只过滤壁纸库，避免隐藏状态改变候选图片。
  *
  * 视图与筛选的关系：显示器 / 壁纸来源 / 设置是独立页面（不筛选壁纸），
  * 壁纸库和合集才需要 scope。所以点合集时自动把视图切到壁纸库，
@@ -38,6 +42,7 @@ interface Props {
  */
 export function SideNav({
   view,
+  compact = false,
   onViewChange,
   scope,
   onScopeChange,
@@ -48,6 +53,20 @@ export function SideNav({
   monitorCount,
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const reduced = useReducedMotion();
+
+  useEffect(() => {
+    if (view !== "library" || scope.kind !== "folder") return;
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      let parent = folders.find((f) => f.id === scope.id)?.parentId;
+      for (let guard = 0; parent && guard < folders.length; guard++) {
+        next.add(parent);
+        parent = folders.find((f) => f.id === parent)?.parentId;
+      }
+      return next;
+    });
+  }, [view, scope, folders]);
 
   /** 按 parentId 分组，避免每个节点都扫一遍全表。 */
   const childrenOf = useMemo(() => {
@@ -80,15 +99,29 @@ export function SideNav({
     return list.map((f) => {
       const hasChildren = f.children.length > 0;
       const open = expanded.has(f.id);
-      const active = scope.kind === "folder" && scope.id === f.id;
+      const active = view === "library" && scope.kind === "folder" && scope.id === f.id;
       return (
         <div key={f.id}>
           <div
             className={`nav-item nav-folder${active ? " is-active" : ""}`}
             style={{ paddingLeft: 12 + depth * 13 }}
             onClick={() => pickFolder(f.id, true)}
+            role="button"
+            tabIndex={0}
+            aria-current={active ? "page" : undefined}
+            onKeyDown={(e) => {
+              if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault(); pickFolder(f.id, true);
+              } else if (e.target === e.currentTarget && hasChildren && e.key === "ArrowRight" && !open) {
+                e.preventDefault(); toggle(f.id);
+              } else if (e.target === e.currentTarget && hasChildren && e.key === "ArrowLeft" && open) {
+                e.preventDefault(); toggle(f.id);
+              }
+            }}
+            aria-expanded={hasChildren ? open : undefined}
             title={`${f.name} · 含子合集共 ${f.totalCount} 张`}
           >
+            {active && <m.span className="nav-active-surface" layoutId="collection-selection" transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 440, damping: 37 }} />}
             <span
               className={`nav-caret${hasChildren ? "" : " is-hidden"}${open ? " is-open" : ""}`}
               onClick={(e) => {
@@ -109,8 +142,9 @@ export function SideNav({
   };
 
   return (
-    <aside className="sidenav">
-      <div className="nav-group">
+    <aside className={`sidenav${compact ? " is-rail" : ""}`}>
+      <div className="nav-brand"><span className="nav-brand-mark"><IconImage size={28} /></span><div><strong>桌面壁纸</strong><span>每一屏，都合心意</span></div></div>
+      <div className="nav-group nav-primary">
         <NavEntry
           icon={<IconDisplay size={15} />}
           label="显示器"
@@ -122,12 +156,23 @@ export function SideNav({
           icon={<IconLibrary size={15} />}
           label="壁纸库"
           badge={totalCount > 0 ? String(totalCount) : undefined}
-          active={view === "library" && scope.kind === "all"}
+          active={view === "library"}
           onClick={() => {
             onScopeChange({ kind: "all" });
             onViewChange("library");
           }}
         />
+        <NavEntry
+          icon={<IconFolder size={15} />}
+          label="合集管理"
+          badge={folders.length > 0 ? String(folders.length) : undefined}
+          active={view === "collections"}
+          onClick={() => onViewChange("collections")}
+        />
+      </div>
+
+      {!compact && <div className="nav-group nav-group-tree nav-filters">
+        <div className="nav-group-head"><span>我的壁纸</span></div>
         <NavEntry
           icon={<IconImage size={15} />}
           label="未归类"
@@ -138,11 +183,13 @@ export function SideNav({
             onViewChange("library");
           }}
         />
-      </div>
+      </div>}
 
-      <div className="nav-group nav-group-tree">
+      {!compact && <div className="nav-collections-scroll">
+      <div className="nav-group nav-group-tree nav-collections">
         <div className="nav-group-head">
           <span>合集</span>
+          <button className="icon-btn tiny" title="管理合集" onClick={() => onViewChange("collections")}><IconSettings size={13} /></button>
           <button
             className="icon-btn tiny"
             title="新建合集"
@@ -157,6 +204,7 @@ export function SideNav({
           renderTree(null, 0)
         )}
       </div>
+      </div>}
 
       <div className="nav-group nav-group-bottom">
         <NavEntry
@@ -189,16 +237,20 @@ function NavEntry({
   active: boolean;
   onClick: () => void;
 }) {
+  const reduced = useReducedMotion();
   return (
     <div
       className={`nav-item${active ? " is-active" : ""}`}
       onClick={onClick}
       role="button"
+      aria-label={`${label}${badge ? ` ${badge}` : ""}`}
+      title={label}
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onClick();
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
       }}
     >
+      {active && <m.span className="nav-active-surface" layoutId="navigation-selection" transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 440, damping: 37 }} />}
       {icon}
       <span className="nav-text">{label}</span>
       {badge && <span className="nav-count">{badge}</span>}

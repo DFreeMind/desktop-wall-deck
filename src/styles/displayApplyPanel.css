@@ -1,0 +1,74 @@
+.display-apply-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  max-width: 240px;
+  height: 260px;
+  min-height: 260px;
+  align-self: stretch;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e7edf6;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 3px 12px #243d6010;
+  color: #253247;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+/* 三屏按可用宽度等分，不预留滚动条槽，避免选中图标把第三个目标挤到下一行。 */
+.display-apply-panel > * { flex-shrink: 0; }
+.display-apply-summary { display: flex; align-items: center; gap: 8px; min-width: 0; height: 68px; padding-bottom: 8px; border-bottom: 1px solid #edf1f6; }
+.display-apply-summary > img { width: 60px; height: 46px; flex: 0 0 60px; object-fit: cover; border: 1px solid #e1e8f2; border-radius: 8px; background: #f3f6fa; }
+.display-apply-summary-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.display-apply-summary-label, .display-apply-summary-copy > span:last-child { color: #58677c; font-size: 12px; white-space: nowrap; }
+.display-apply-summary strong { overflow: hidden; color: #293950; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.display-apply-empty { display: flex; min-height: 132px; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 12px; border: 1px dashed #dce5f1; border-radius: 12px; background: #f8faff; }
+.display-apply-empty-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+.display-apply-empty strong { color: #293950; font-size: 14px; }
+.display-apply-empty > span:last-child { color: #58677c; font-size: 12px; line-height: 1.5; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact { display: flex; min-width: 0; flex-direction: column; align-items: stretch; gap: 8px; min-height: 0; padding: 0; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-targets { gap: 6px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-target-heading { display: flex; min-width: 0; gap: 4px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-target-prompt { color: #35445b; font-size: 13px; font-weight: 650; white-space: nowrap; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-target-heading button { margin-left: auto; padding: 0; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-chips {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(54px, 1fr);
+  justify-content: stretch;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 1px;
+}
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-chip { min-width: 0; max-width: none; width: 100%; min-height: 30px; padding: 3px 4px; gap: 3px; border-radius: 9px; }
+/* 选中与未选中使用同尺寸图标槽，文字不参与列宽计算。 */
+.display-apply-panel .wallpaper-apply-chip-check { width: 16px; height: 16px; flex: 0 0 16px; }
+.display-apply-panel .wallpaper-apply-chip-check svg { max-width: 16px; }
+.display-apply-panel .wallpaper-apply-chip-copy { flex: 1; }
+.display-apply-panel .wallpaper-apply-chip-copy strong { max-width: 100%; font-size: 12px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-chip-copy small { display: none; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-controls { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-position { flex-direction: row; align-items: center; justify-content: space-between; gap: 4px; color: #35445b; font-size: 13px; font-weight: 600; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-position select { flex: 1; min-height: 32px; min-width: 0; margin: 0; font-size: 13px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-actions { flex-direction: row; gap: 6px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-primary { flex: 1; min-width: 0; min-height: 34px; font-size: 13px; }
+.display-apply-panel > .wallpaper-apply-bar.is-compact .wallpaper-apply-more { width: 32px; min-height: 34px; flex: 0 0 32px; border-color: #e1e7ef; background: #fff; }
+.display-apply-panel.is-empty .wallpaper-apply-targets,
+.display-apply-panel.is-empty .wallpaper-apply-position,
+.display-apply-panel.is-empty .wallpaper-apply-more { display: none !important; }
+.display-apply-panel.is-empty > .wallpaper-apply-bar.is-compact .wallpaper-apply-controls { gap: 0; }
+/* 收起后保持一百像素占位，窗口变窄时允许控件在这个区域内换行。 */
+.display-apply-panel.is-compact { width: 100%; max-width: 100%; height: 100px; min-height: 100px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; border: 0; box-shadow: none; }
+.display-apply-panel.is-compact .display-apply-summary { flex: 0 1 145px; height: 60px; padding: 0; border: 0; }
+.display-apply-panel.is-compact .display-apply-summary > img { width: 48px; height: 36px; flex-basis: 48px; }
+.display-apply-panel.is-compact .display-apply-empty { min-height: 0; flex: 1; flex-direction: row; align-items: center; padding: 6px; border: 0; background: transparent; }
+.display-apply-panel.is-compact .display-apply-empty > span:last-child { display: none; }
+.display-apply-panel.is-compact .display-apply-empty-icon { width: 28px; height: 28px; flex: 0 0 28px; }
+.display-apply-panel.is-compact > .wallpaper-apply-bar.is-compact { flex: 1; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+.display-apply-panel.is-compact > .wallpaper-apply-bar.is-compact .wallpaper-apply-target-heading { display: none; }
+.display-apply-panel.is-compact > .wallpaper-apply-bar.is-compact .wallpaper-apply-controls { flex-direction: row; align-items: center; gap: 6px; }
+.display-apply-panel.is-compact > .wallpaper-apply-bar.is-compact .wallpaper-apply-chips { max-width: 240px; }
+.display-apply-panel.is-compact > .wallpaper-apply-bar.is-compact .wallpaper-apply-position > .wallpaper-apply-position-label { display: inline-flex; font-size: 0; gap: 0; }
+.display-apply-panel.is-compact > .wallpaper-apply-bar.is-compact .wallpaper-apply-position select { min-width: 62px; }

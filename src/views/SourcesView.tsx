@@ -1,224 +1,147 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { api } from "../lib/api";
+import type { OnlineSearchResult, OnlineWallpaper } from "../lib/types";
 import { WALLPAPER_SOURCES, type WallpaperSource } from "../lib/wallpaperSources";
-import {
-  IconExternal,
-  IconGlobe,
-  IconRefresh,
-  IconSearch,
-} from "../components/icons";
+import { IconCheck, IconExternal, IconGlobe, IconPlus, IconRefresh, IconSearch } from "../components/icons";
 
 interface Props {
-  /**
-   * 站点拒绝被嵌入时的兜底：在系统浏览器打开。
-   *
-   * 只有站点主动禁止内嵌（X-Frame-Options / CSP frame-ancestors）才会用到，
-   * 常规浏览完全在应用内完成。
-   */
   onOpenExternal: (url: string) => void;
+  onImport: (item: OnlineWallpaper, apply: boolean) => Promise<void>;
+  targetLabel: string;
+  onSelectTargets: () => void;
 }
 
-/**
- * 壁纸来源页：应用内浏览。
- *
- * 布局是「左列表 + 右浏览区」：左边挑站点，右边直接加载页面，
- * 用户看完觉得合适就下载，然后把图拖回壁纸库——全程不离开应用。
- *
- * # 为什么用 iframe 而不是原生子 WebView
- *
- * 原生子 WebView（`add_child`）能绕过 X-Frame-Options，但需要开启 Tauri 的
- * `unstable` feature，并且要在窗口坐标系里手动跟随布局变化重排，
- * 与当前 React 布局耦合很重。绝大多数目标站点并未禁止内嵌，
- * iframe 已经够用；对少数禁止的站点，明确告知比强行破限更合适。
- *
- * # 内嵌的限制要说清楚
- *
- * 浏览器出于安全不允许父页面读取跨域 iframe 的 DOM，
- * 所以「加载失败」无法用代码判定——只能靠超时提示 + 手动回退。
- * 这比假装一切正常要诚实。
- */
-export function SourcesView({ onOpenExternal }: Props) {
-  const [activeId, setActiveId] = useState<string>(WALLPAPER_SOURCES[0].id);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [slow, setSlow] = useState(false);
-  const [query, setQuery] = useState("");
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+// 缓存请求本身，同时合并 StrictMode 与重复切换来源产生的并发请求。
+const requests = new Map<string, { time: number; result: Promise<OnlineSearchResult> }>();
+function search(source: string, query: string, page: number, force: boolean) {
+  const key = JSON.stringify([source, query, page]);
+  const cached = requests.get(key);
+  if (!force && cached && Date.now() - cached.time < 5 * 60_000) return cached.result;
+  const result = api.onlineSearch(source, query, page);
+  if (requests.size >= 64) requests.delete(requests.keys().next().value!);
+  requests.set(key, { time: Date.now(), result });
+  // 防止旧请求失败时清掉更新的重试请求。
+  void result.catch(() => { if (requests.get(key)?.result === result) requests.delete(key); });
+  return result;
+}
 
-  const active = WALLPAPER_SOURCES.find((s) => s.id === activeId) ?? WALLPAPER_SOURCES[0];
-
-  /**
-   * 加载态管理。
-   *
-   * 跨域 iframe 的 `onLoad` 并不可靠：站点被 X-Frame-Options 拒绝、
-   * 或在重定向过程中被中断时，load 事件可能永远不触发。
-   * 若只依赖它，遮罩会一直盖着，用户看不到「其实已经失败」。
-   *
-   * 因此再加一个兜底计时器：4 秒后无论如何撤掉遮罩。
-   * 撤掉后用户看到的要么是页面，要么是浏览器自己的错误页——
-   * 两者都比一块转圈的遮罩更接近真相。
-   */
-  useEffect(() => {
-    setLoading(true);
-    setSlow(false);
-    const slowTimer = setTimeout(() => setSlow(true), 6000);
-    const giveUp = setTimeout(() => setLoading(false), 4500);
-    return () => {
-      clearTimeout(slowTimer);
-      clearTimeout(giveUp);
-    };
-  }, [activeId, reloadKey]);
-
-  const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return WALLPAPER_SOURCES;
-    return WALLPAPER_SOURCES.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.blurb.toLowerCase().includes(q) ||
-        s.tags.some((t) => t.toLowerCase().includes(q)),
-    );
-  }, [query]);
-
-  const pick = (s: WallpaperSource) => {
-    setActiveId(s.id);
-  };
-
+export function SourcesView(props: Props) {
+  const [activeId, setActiveId] = useState("wallhaven");
+  const active = WALLPAPER_SOURCES.find((s) => s.id === activeId)!;
   return (
     <div className="page page-flush sources-page">
       <header className="page-head">
-        <div>
-          <h1>壁纸来源</h1>
-          <p className="page-sub">
-            精选的免费壁纸站点，直接在应用内浏览。找到喜欢的图下载后，拖进壁纸库即可使用。
-          </p>
-        </div>
+        <div><h1>发现壁纸</h1><p className="page-sub">从在线图库挑选喜欢的图片，加入壁纸库后即可离线使用。</p></div>
+        <button className="ghost small" onClick={props.onSelectTargets}>应用目标：{props.targetLabel}</button>
       </header>
-
-      <div className="sources-body">
-        {/* 左：站点列表 */}
-        <aside className="sources-side">
-          <label className="search search-block">
-            <IconSearch size={13} />
-            <input
-              placeholder="筛选站点"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-
-          <ul className="source-list">
-            {list.map((s) => (
-              <li key={s.id}>
-                <button
-                  className={`source-item${s.id === activeId ? " is-active" : ""}`}
-                  onClick={() => pick(s)}
-                >
-                  <span className="source-item-icon">
-                    <IconGlobe size={14} />
-                  </span>
-                  <span className="source-item-body">
-                    <span className="source-item-name">
-                      {s.name}
-                      {!s.embeddable && <span className="source-item-flag">需外部打开</span>}
-                    </span>
-                    <span className="source-item-license">{s.license}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-            {list.length === 0 && <li className="source-list-empty">没有匹配的站点</li>}
-          </ul>
-
-          <p className="sources-note">
-            授权说明仅供快速参考，实际使用前请以站点页面最新条款为准。
-          </p>
-        </aside>
-
-        {/* 右：浏览区 */}
-        <section className="sources-main">
-          <div className="browser-bar">
-            <div className="browser-bar-left">
-              <button
-                className="icon-plain"
-                title="重新加载"
-                onClick={() => setReloadKey((k) => k + 1)}
-              >
-                <IconRefresh size={14} />
-              </button>
-              <span className="browser-url" title={active.url}>
-                {stripScheme(active.url)}
-              </span>
-            </div>
-            <div className="browser-bar-right">
-              <span className="browser-license">{active.license}</span>
-              <button
-                className="ghost small"
-                onClick={() => onOpenExternal(active.url)}
-                title="在系统浏览器中打开"
-              >
-                <IconExternal size={12} />
-                浏览器打开
-              </button>
-            </div>
-          </div>
-
-          <div className="browser-stage">
-            {active.embeddable ? (
-              <>
-                <iframe
-                  key={`${active.id}-${reloadKey}`}
-                  ref={iframeRef}
-                  className="browser-frame"
-                  src={active.url}
-                  title={active.name}
-                  onLoad={() => setLoading(false)}
-                  referrerPolicy="no-referrer-when-downgrade"
-                />
-                {loading && (
-                  <div className="browser-overlay">
-                    <span className="spinner" />
-                    <span>正在加载 {active.name}…</span>
-                    {slow && (
-                      <p className="browser-overlay-hint">
-                        加载较慢，可能是网络原因。可以重试，或在浏览器中打开。
-                      </p>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="browser-blocked">
-                <span className="browser-blocked-icon">
-                  <IconGlobe size={26} />
-                </span>
-                <h3>{active.name} 不允许被嵌入显示</h3>
-                <p>
-                  该站点设置了 <code>X-Frame-Options: SAMEORIGIN</code>，
-                  禁止在自己的页面之外的框架中显示。这是站点的安全策略，应用无法绕过。
-                </p>
-                <p className="browser-blocked-hint">
-                  想继续浏览这个站点，请用系统浏览器打开；在应用内可以先用左侧其他站点。
-                </p>
-                <button className="primary" onClick={() => onOpenExternal(active.url)}>
-                  <IconExternal size={13} />
-                  在浏览器中打开 {active.name}
-                </button>
-              </div>
-            )}
-          </div>
-
-          <p className="sources-hint">
-            {active.blurb}
-            <span className="dot" />
-            在站点下载图片后，回到「壁纸库」点「导入图片」，或直接把文件拖进窗口。
-          </p>
-        </section>
-      </div>
+      <nav className="source-tabs" aria-label="壁纸来源">
+        {WALLPAPER_SOURCES.filter((s) => s.online).map((s) => (
+          <button key={s.id} className={`source-tab${s.id === activeId ? " is-active" : ""}`}
+            aria-pressed={s.id === activeId} onClick={() => setActiveId(s.id)}><IconGlobe size={14} />{s.name}</button>
+        ))}
+        <span className="source-tabs-divider" />
+        {WALLPAPER_SOURCES.filter((s) => !s.online).map((s) => (
+          <button key={s.id} className={`source-tab source-tab-extra${s.id === activeId ? " is-active" : ""}`}
+            aria-pressed={s.id === activeId} onClick={() => setActiveId(s.id)}>{s.name}<IconExternal size={11} /></button>
+        ))}
+      </nav>
+      {active.online ? <SourceResults key={active.id} source={active} {...props} /> : (
+        <div className="online-empty">
+          <IconGlobe size={30} /><h2>{active.name}</h2><p>{active.blurb}</p>
+          <button className="primary" onClick={() => props.onOpenExternal(active.home)}><IconExternal size={14} />前往官网</button>
+          <button className="ghost" onClick={() => setActiveId("wallhaven")}>浏览已接入的在线壁纸</button>
+        </div>
+      )}
     </div>
   );
 }
 
-/** 地址栏只显示主机与路径，去掉协议前缀，视觉上更像浏览器的地址栏。 */
-function stripScheme(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+function SourceResults({ source, onOpenExternal, onImport }: Props & { source: WallpaperSource }) {
+  const [input, setInput] = useState("");
+  const [query, setQuery] = useState("");
+  const [items, setItems] = useState<OnlineWallpaper[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [imported, setImported] = useState(new Set<string>());
+  const [revision, setRevision] = useState(0);
+  const requestId = useRef(0);
+  const busyRef = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; requestId.current++; }; }, []);
+
+  async function load(nextPage: number, force = false) {
+    const ticket = ++requestId.current;
+    setLoading(true); setError(null);
+    try {
+      const result = await search(source.id, query, nextPage, force);
+      if (ticket !== requestId.current) return;
+      setItems((previous) => nextPage === 1 ? result.items : [...previous, ...result.items.filter((i) => !previous.some((p) => p.id === i.id))]);
+      setPage(result.page); setHasMore(result.hasMore);
+    } catch (e) {
+      if (ticket === requestId.current) setError((e as Error).message);
+    } finally { if (ticket === requestId.current) setLoading(false); }
+  }
+
+  useEffect(() => {
+    setItems([]); setPage(0); setHasMore(false);
+    void load(1, revision > 0);
+    return () => { requestId.current++; };
+  }, [source.id, query, revision]);
+
+  async function importItem(item: OnlineWallpaper, apply: boolean) {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusyId(item.id); setImportError(null);
+    try {
+      await onImport(item, apply);
+      if (mounted.current) setImported((s) => new Set([...s, item.id]));
+    } catch (e) { if (mounted.current) setImportError((e as Error).message); }
+    finally { busyRef.current = false; if (mounted.current) setBusyId(null); }
+  }
+
+  return <>
+    <div className="online-toolbar">
+      <form className="online-search" onSubmit={(e) => { e.preventDefault(); const next = input.trim(); if (next === query) setRevision((r) => r + 1); else setQuery(next); }}>
+        <label className="search"><IconSearch size={14} /><input aria-label="搜索在线壁纸" placeholder={`搜索 ${source.name}，如 mountains、forest…`} value={input} onChange={(e) => setInput(e.target.value)} maxLength={160} /></label>
+        <button className="primary" type="submit">搜索</button>
+      </form>
+      <button className="icon-text-btn" disabled={loading} onClick={() => setRevision((r) => r + 1)}><IconRefresh size={14} />刷新壁纸</button>
+      <button className="icon-text-btn" onClick={() => onOpenExternal(source.home)}><IconExternal size={13} />来源官网</button>
+    </div>
+    <p className="online-description">{source.blurb}</p>
+    {importError && <div className="online-error" role="alert">{importError}<button className="link-btn" onClick={() => setImportError(null)}>关闭</button></div>}
+    <div className="online-scroll" aria-busy={loading}>
+      {loading && items.length === 0 && <div className="online-empty" role="status"><span className="spinner" /><p>正在加载 {source.name} 的壁纸…</p></div>}
+      {!loading && !error && items.length === 0 && <div className="online-empty"><IconSearch size={26} /><h2>没有找到相关图片</h2><p>试试其他关键词；Wallhaven 和 NASA 建议用英文搜索。</p></div>}
+      <div className="online-grid">
+        {items.map((item) => <article className="online-card" key={item.id}>
+          <button className="online-image" onClick={() => onOpenExternal(item.pageUrl)} title="查看原图与许可">
+            <img src={item.thumbnailUrl} alt={item.title} loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.visibility = "hidden"; e.currentTarget.parentElement!.dataset.failed = "true"; }} />
+            <span className="online-image-note">查看原图</span>
+            <span className="online-resolution">{item.width > 0 ? `${item.width} × ${item.height}` : "NASA 影像"}</span>
+          </button>
+          <div className="online-card-body">
+            <h2 title={item.title}>{item.title}</h2>
+            <p className="online-credit" title={item.author}>{item.author || source.name}</p>
+            <p className="online-license" title={item.license}>{item.license}</p>
+            <div className="online-card-actions">
+              <button className="ghost small" disabled={!!busyId || imported.has(item.id)} onClick={() => void importItem(item, false)}>
+                {imported.has(item.id) ? <IconCheck size={12} /> : <IconPlus size={12} />}{imported.has(item.id) ? "已加入" : busyId === item.id ? "下载中…" : "加入壁纸库"}
+              </button>
+              <button className="primary small" disabled={!!busyId} onClick={() => void importItem(item, true)}>设为壁纸</button>
+            </div>
+          </div>
+        </article>)}
+      </div>
+      {error && <div className="online-empty online-load-error" role="alert"><h2>暂时无法加载 {source.name}</h2><p>{error}</p><button className="ghost" onClick={() => void load(page + 1, true)}>重新加载</button><p>也可以切换上方其他来源。</p></div>}
+      {items.length > 0 && !error && <div className="online-pagination">
+        {hasMore ? <button className="ghost" disabled={loading} onClick={() => void load(page + 1)}>{loading ? "正在加载…" : "加载更多壁纸"}</button> : <span>已展示全部 {items.length} 张图片</span>}
+      </div>}
+    </div>
+    <p className="sources-hint">图片按需下载到本地壁纸库。{source.license}，作者与许可随图片来源信息保存。</p>
+  </>;
 }

@@ -1,0 +1,364 @@
+/* Pointer-driven wallpaper assignment feedback. These rules are deliberately
+   limited to paint effects so monitor geometry and gallery layout stay fixed. */
+
+body.wallpaper-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.card { user-select: none; -webkit-user-select: none; }
+
+.card.is-wallpaper-dragging {
+  opacity: 0.45;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border), var(--shadow-1);
+}
+
+.screen.is-drop-ready {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px rgb(var(--theme-rgb) / 0.12), 0 2px 7px rgb(var(--theme-rgb) / 0.08);
+  transition: border-color 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+}
+
+.screen.is-drop-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(var(--theme-rgb) / 0.3), 0 4px 14px rgb(var(--theme-rgb) / 0.22);
+}
+
+.screen.is-drop-muted {
+  opacity: 0.58;
+}
+
+.screen-drop-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.screen-drop-feedback {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text);
+  pointer-events: none;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.8);
+}
+
+.screen-drop-feedback > span {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--accent-border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: 0 2px 8px rgba(20, 23, 31, 0.12);
+}
+
+.screen-drop-feedback > span.spinner {
+  border-color: var(--accent-border);
+  border-top-color: var(--accent);
+  animation: wallpaper-drop-spin 800ms linear infinite;
+}
+
+.screen-drop-feedback > span.check {
+  border: 0;
+  background: #e8f6ef;
+  color: #16835d;
+}
+
+.screen-drop-feedback > small {
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .93);
+  text-shadow: none;
+}
+
+.screen-drop-feedback.is-compact > span { display: none; }
+.screen.is-drop-target .screen-blank-inner { opacity: 0; }
+.screen.is-drop-target .screen-label, .screen.is-drop-target .screen-tag, .screen.is-drop-target .screen-check { z-index: 2; }
+.drop-shelf-target > strong > small { display: block; margin-top: 3px; font-size: 12px; font-weight: 400; color: var(--text-3); }
+.card:not([data-source-missing]) { cursor: grab; }
+body.wallpaper-dragging * { cursor: grabbing !important; }
+
+.screen.is-drop-applying {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(var(--theme-rgb) / 0.28), 0 4px 14px rgb(var(--theme-rgb) / 0.18);
+}
+
+.screen.is-drop-success {
+  border-color: #16835d;
+  box-shadow: 0 0 0 2px rgba(22, 131, 93, 0.24), 0 4px 12px rgba(22, 131, 93, 0.14);
+}
+
+.screen.is-drop-error {
+  border-color: #c65050;
+  box-shadow: 0 0 0 2px rgba(198, 80, 80, 0.22), 0 4px 12px rgba(198, 80, 80, 0.12);
+}
+
+.wallpaper-drag-layer {
+  position: fixed;
+  z-index: 600;
+  inset: 0;
+  pointer-events: none;
+}
+
+.wallpaper-drag-ghost {
+  position: fixed;
+  z-index: 602;
+  top: 0;
+  left: 0;
+  width: 174px;
+  overflow: hidden;
+  border: 1px solid rgb(var(--theme-rgb) / 0.22);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(20, 35, 60, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.8);
+  color: var(--text);
+  opacity: 0.96;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.wallpaper-drag-ghost > img {
+  display: block;
+  width: 100%;
+  height: 98px;
+  object-fit: cover;
+}
+
+.drag-ghost-caption {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px 8px;
+}
+
+.drag-ghost-caption strong,
+.drag-ghost-caption span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drag-ghost-caption strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.drag-ghost-caption span {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.wallpaper-drag-ghost.is-applying {
+  opacity: 0.9;
+  box-shadow: 0 8px 24px rgba(20, 35, 60, 0.16), 0 0 0 2px rgb(var(--theme-rgb) / 0.3);
+}
+
+.wallpaper-drag-ghost.is-success {
+  opacity: 0;
+  box-shadow: 0 6px 18px rgba(22, 131, 93, 0.18), 0 0 0 2px rgba(22, 131, 93, 0.28);
+}
+
+.wallpaper-drag-ghost.is-error {
+  opacity: 0.72;
+  box-shadow: 0 6px 18px rgba(198, 80, 80, 0.16), 0 0 0 2px rgba(198, 80, 80, 0.26);
+}
+
+.wallpaper-drop-shelf {
+  position: fixed;
+  z-index: 601;
+  top: 18px;
+  left: 0;
+  right: 0;
+  width: max-content;
+  max-width: min(740px, calc(100vw - 40px));
+  margin-inline: auto;
+  padding: 11px 13px 12px;
+  border: 1px solid rgb(var(--theme-rgb) / 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 28px rgba(20, 35, 60, 0.14), 0 1px 3px rgba(20, 35, 60, 0.08);
+  color: var(--text);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drop-shelf-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 1px 9px;
+}
+
+.drop-shelf-head strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.drop-shelf-head > span {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drop-shelf-targets {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  justify-content: center;
+  gap: 10px;
+}
+
+.drop-shelf-target {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 80px;
+  max-width: 200px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border: 1px solid rgba(82, 96, 121, 0.16);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 200ms ease, background-color 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+}
+
+.drop-shelf-target:hover,
+.drop-shelf-target:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgb(var(--theme-rgb) / 0.12);
+}
+
+.drop-shelf-target:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.drop-shelf-target > img {
+  display: block;
+  flex: 0 0 72px;
+  width: 72px;
+  height: 44px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  object-fit: cover;
+}
+
+.drop-shelf-target > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drop-shelf-target.is-drop-target {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px rgb(var(--theme-rgb) / 0.16), 0 3px 10px rgb(var(--theme-rgb) / 0.12);
+}
+
+.drop-shelf-target.is-drop-applying {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(var(--theme-rgb) / 0.2);
+}
+
+.drop-shelf-target.is-drop-success {
+  border-color: #16835d;
+  background: #eff9f4;
+  box-shadow: 0 0 0 2px rgba(22, 131, 93, 0.16);
+}
+
+.drop-shelf-target.is-drop-error {
+  border-color: #c65050;
+  background: #fff5f5;
+  box-shadow: 0 0 0 2px rgba(198, 80, 80, 0.15);
+}
+
+.drag-live-status {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+@keyframes wallpaper-drop-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 940px) {
+  .wallpaper-drop-shelf {
+    max-width: calc(100vw - 32px);
+    padding: 9px 10px 10px;
+  }
+
+  .drop-shelf-targets { gap: 7px; }
+  .drop-shelf-target { gap: 6px; padding: 5px 6px; }
+}
+
+@media (max-width: 560px) {
+  .wallpaper-drop-shelf { max-width: calc(100vw - 24px); }
+  .drop-shelf-head > span { display: none; }
+  .drop-shelf-target > img { flex-basis: 48px; width: 48px; height: 36px; }
+  .drop-shelf-target { min-width: 64px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen.is-drop-ready,
+  .drop-shelf-target,
+  .wallpaper-drag-ghost,
+  .wallpaper-drop-shelf,
+  .screen-drop-feedback > span.spinner {
+    animation: none !important;
+    transition: none !important;
+  }
+}
